@@ -191,3 +191,61 @@
 }
 /* ================= END MOBILE RESPONSIVE FIX ================= */
 
+
+/* =============== ADMIN DASHBOARD MOBILE TABLE FIX =============== */
+@media screen and (max-width: 768px) {
+  table {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-collapse: separate !important;
+    border-spacing: 0 0.9rem !important;
+    overflow: visible !important;
+  }
+
+  table thead {
+    display: none !important;
+  }
+
+  table tbody,
+  table tr,
+  table td {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  table tr {
+    background: rgba(15, 22, 38, 0.92) !important;
+    border: 1px solid rgba(0, 242, 254, 0.18) !important;
+    border-radius: 16px !important;
+    padding: 0.9rem !important;
+    margin-bottom: 0.9rem !important;
+  }
+
+  table td {
+    border: none !important;
+    padding: 0.45rem 0 !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  table td:last-child {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0.55rem !important;
+    margin-top: 0.5rem !important;
+  }
+
+  table td:last-child button {
+    display: block !important;
+    width: 100% !important;
+    min-height: 42px !important;
+    font-size: 0.9rem !important;
+    padding: 0.7rem 0.9rem !important;
+    border-radius: 12px !important;
+    text-align: center !important;
+  }
+}
+/* =============== END ADMIN DASHBOARD MOBILE TABLE FIX =============== */
+
