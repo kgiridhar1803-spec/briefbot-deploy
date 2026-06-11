@@ -2875,83 +2875,108 @@ async function getUserProgressDetails(userId) {
 
   const user = safeUser({ id: userDoc.id, ...userDoc.data() });
 
-  let historySnapshot;
+  let allSummaries = [];
   try {
-    historySnapshot = await usersCollection.doc(cleanUserId).collection('summaryHistory').orderBy('updatedAt', 'desc').get();
-  } catch {
-    historySnapshot = await usersCollection.doc(cleanUserId).collection('summaryHistory').get();
+    let historySnapshot;
+    try {
+      historySnapshot = await usersCollection.doc(cleanUserId).collection('summaryHistory').orderBy('updatedAt', 'desc').get();
+    } catch {
+      historySnapshot = await usersCollection.doc(cleanUserId).collection('summaryHistory').get();
+    }
+    allSummaries = historySnapshot.docs.map((doc) => safeHistoryItem(doc));
+  } catch (summaryError) {
+    console.error('[Admin Summary Details Warning]', summaryError.message);
   }
-  const allSummaries = historySnapshot.docs.map((doc) => safeHistoryItem(doc));
 
-  let pptSnapshot;
+  let allPpts = [];
   try {
-    pptSnapshot = await usersCollection.doc(cleanUserId).collection('savedPpts').orderBy('createdAt', 'desc').get();
-  } catch {
-    pptSnapshot = await usersCollection.doc(cleanUserId).collection('savedPpts').get();
+    let pptSnapshot;
+    try {
+      pptSnapshot = await usersCollection.doc(cleanUserId).collection('savedPpts').orderBy('createdAt', 'desc').get();
+    } catch {
+      pptSnapshot = await usersCollection.doc(cleanUserId).collection('savedPpts').get();
+    }
+    allPpts = pptSnapshot.docs.map((doc) => safePptItem(doc));
+  } catch (pptError) {
+    console.error('[Admin PPT Details Warning]', pptError.message);
   }
-  const allPpts = pptSnapshot.docs.map((doc) => safePptItem(doc));
 
-  const assessmentSnapshot = await assessmentsCollection.orderBy('createdAt', 'desc').limit(250).get();
   const attempts = [];
   let assessmentsCreated = 0;
   let battleRoomsGenerated = 0;
   const battleRooms = [];
 
-  for (const assessmentDoc of assessmentSnapshot.docs) {
-    const assessmentData = assessmentDoc.data() || {};
-
-    if (String(assessmentData.createdBy || '') === cleanUserId) {
-      assessmentsCreated += 1;
-
-      if (assessmentData.assessmentMode === 'battle') {
-        battleRoomsGenerated += 1;
-        const playersRaw = assessmentData.players || {};
-        const players = Array.isArray(playersRaw)
-          ? playersRaw
-          : Object.keys(playersRaw).map((playerId) => ({ userId: playerId, ...playersRaw[playerId] }));
-
-        battleRooms.push({
-          id: assessmentDoc.id,
-          roomCode: assessmentData.roomCode || '',
-          title: assessmentData.title || 'Battle Room',
-          status: assessmentData.status || 'waiting',
-          source: 'assessments',
-          playerCount: players.length,
-          attemptedCount: players.filter((player) => player.submitted).length,
-          createdAt: assessmentData.createdAt || null,
-          startedAt: assessmentData.startedAt || null,
-          completedAt: assessmentData.completedAt || null
-        });
-      }
+  try {
+    let assessmentSnapshot;
+    try {
+      assessmentSnapshot = await assessmentsCollection.orderBy('createdAt', 'desc').limit(250).get();
+    } catch {
+      assessmentSnapshot = await assessmentsCollection.limit(250).get();
     }
 
-    const attemptSnapshot = await assessmentDoc.ref.collection('attempts').where('userId', '==', cleanUserId).get();
-    attemptSnapshot.docs.forEach((attemptDoc) => {
-      const attemptData = attemptDoc.data() || {};
-      attempts.push({
-        id: attemptDoc.id,
-        assessmentId: assessmentDoc.id,
-        assessmentTitle: assessmentData.title || 'Assessment',
-        assessmentMode: assessmentData.assessmentMode || 'solo',
-        questionType: assessmentData.questionType || 'mcq',
-        difficulty: assessmentData.difficulty || 'medium',
-        roomCode: assessmentData.roomCode || '',
-        score: Number(attemptData.score || 0),
-        totalMarks: Number(attemptData.totalMarks || assessmentData.questionCount || 20),
-        percentage: Number(attemptData.percentage || 0),
-        accuracy: Number(attemptData.accuracy || attemptData.percentage || 0),
-        remarks: attemptData.remarks || '',
-        achievement: attemptData.achievement || '',
-        timeTakenSeconds: Number(attemptData.timeTakenSeconds || 0),
-        submittedAt: attemptData.submittedAt || null,
-        autoSubmit: Boolean(attemptData.autoSubmit)
-      });
-    });
+    for (const assessmentDoc of assessmentSnapshot.docs) {
+      const assessmentData = assessmentDoc.data() || {};
+
+      if (String(assessmentData.createdBy || '') === cleanUserId) {
+        assessmentsCreated += 1;
+
+        if (assessmentData.assessmentMode === 'battle') {
+          battleRoomsGenerated += 1;
+          const playersRaw = assessmentData.players || {};
+          const players = Array.isArray(playersRaw)
+            ? playersRaw
+            : Object.keys(playersRaw).map((playerId) => ({ userId: playerId, ...playersRaw[playerId] }));
+
+          battleRooms.push({
+            id: assessmentDoc.id,
+            roomCode: assessmentData.roomCode || '',
+            title: assessmentData.title || 'Battle Room',
+            status: assessmentData.status || 'waiting',
+            source: 'assessments',
+            playerCount: players.length,
+            attemptedCount: players.filter((player) => player.submitted).length,
+            createdAt: assessmentData.createdAt || null,
+            startedAt: assessmentData.startedAt || null,
+            completedAt: assessmentData.completedAt || null
+          });
+        }
+      }
+
+      try {
+        const attemptSnapshot = await assessmentDoc.ref.collection('attempts').where('userId', '==', cleanUserId).get();
+        attemptSnapshot.docs.forEach((attemptDoc) => {
+          const attemptData = attemptDoc.data() || {};
+          attempts.push({
+            id: attemptDoc.id,
+            assessmentId: assessmentDoc.id,
+            assessmentTitle: assessmentData.title || 'Assessment',
+            assessmentMode: assessmentData.assessmentMode || 'solo',
+            questionType: assessmentData.questionType || 'mcq',
+            difficulty: assessmentData.difficulty || 'medium',
+            roomCode: assessmentData.roomCode || '',
+            score: Number(attemptData.score || 0),
+            totalMarks: Number(attemptData.totalMarks || assessmentData.questionCount || 20),
+            percentage: Number(attemptData.percentage || 0),
+            accuracy: Number(attemptData.accuracy || attemptData.percentage || 0),
+            remarks: attemptData.remarks || '',
+            achievement: attemptData.achievement || '',
+            timeTakenSeconds: Number(attemptData.timeTakenSeconds || 0),
+            submittedAt: attemptData.submittedAt || null,
+            autoSubmit: Boolean(attemptData.autoSubmit)
+          });
+        });
+      } catch (attemptError) {
+        console.error('[Admin Attempt Details Warning]', attemptError.message);
+      }
+    }
+  } catch (assessmentError) {
+    console.error('[Admin Assessment Details Warning]', assessmentError.message);
   }
 
   try {
     const oldBattleRoomsSnapshot = await firestoreDb.collection('battleRooms').where('hostId', '==', cleanUserId).get();
     battleRoomsGenerated += oldBattleRoomsSnapshot.size;
+
     oldBattleRoomsSnapshot.docs.forEach((doc) => {
       const data = doc.data() || {};
       const playersRaw = data.players || {};
@@ -2973,7 +2998,7 @@ async function getUserProgressDetails(userId) {
       });
     });
   } catch (battleError) {
-    console.log('[User Progress Battle Count Warning]', battleError.message);
+    console.error('[Admin Battle Details Warning]', battleError.message);
   }
 
   let smartCompareCount = 0;
@@ -2982,6 +3007,7 @@ async function getUserProgressDetails(userId) {
   try {
     const smartCompareReportsSnapshot = await firestoreDb.collection('smartCompareReports').where('userId', '==', cleanUserId).get();
     smartCompareCount += smartCompareReportsSnapshot.size;
+
     smartCompareReportsSnapshot.docs.forEach((doc) => {
       const data = doc.data() || {};
       smartCompares.push({
@@ -2998,35 +3024,30 @@ async function getUserProgressDetails(userId) {
       });
     });
   } catch (smartReportError) {
-    console.log('[User Progress Smart Compare Report Warning]', smartReportError.message);
+    console.error('[Admin Smart Compare Details Warning]', smartReportError.message);
   }
 
   try {
     const smartCompareActivitySnapshot = await activitiesCollection.where('userId', '==', cleanUserId).where('type', '==', 'smart_compare_generated').get();
     smartCompareCount = Math.max(smartCompareCount, smartCompareActivitySnapshot.size);
+
     smartCompareActivitySnapshot.docs.forEach((doc) => {
       const data = doc.data() || {};
-      const duplicate = smartCompares.some((item) =>
-        String(item.video1 || '') === String(data.meta?.video1 || '') &&
-        String(item.video2 || '') === String(data.meta?.video2 || '')
-      );
-      if (!duplicate) {
-        smartCompares.push({
-          id: doc.id,
-          video1: data.meta?.video1 || '',
-          video2: data.meta?.video2 || '',
-          video1Topic: '',
-          video2Topic: '',
-          similarityScore: Number(data.meta?.similarityScore || 0),
-          isSimilar: Boolean(data.meta?.isSimilar),
-          bestOverall: '',
-          generatedAt: data.createdAt || null,
-          source: 'activities'
-        });
-      }
+      smartCompares.push({
+        id: doc.id,
+        video1: data.meta?.video1 || '',
+        video2: data.meta?.video2 || '',
+        video1Topic: '',
+        video2Topic: '',
+        similarityScore: Number(data.meta?.similarityScore || 0),
+        isSimilar: Boolean(data.meta?.isSimilar),
+        bestOverall: '',
+        generatedAt: data.createdAt || null,
+        source: 'activities'
+      });
     });
   } catch (smartActivityError) {
-    console.log('[User Progress Smart Compare Activity Warning]', smartActivityError.message);
+    console.error('[Admin Smart Compare Activity Warning]', smartActivityError.message);
   }
 
   attempts.sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')));
