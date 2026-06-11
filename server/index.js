@@ -45,8 +45,25 @@ function nowISO() {
 }
 
 function loadFirebaseServiceAccount() {
+  const envJson =
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
+    process.env.FIREBASE_SERVICE_ACCOUNT ||
+    '';
+
+  if (envJson.trim()) {
+    try {
+      const parsed = JSON.parse(envJson);
+      if (parsed.private_key) {
+        parsed.private_key = String(parsed.private_key).replace(/\\n/g, '\n');
+      }
+      return parsed;
+    } catch (error) {
+      throw new Error(`FIREBASE_SERVICE_ACCOUNT_JSON is invalid JSON: ${error.message}`);
+    }
+  }
+
   if (!fs.existsSync(FIREBASE_SERVICE_FILE)) {
-    throw new Error('firebase-service-account.json is missing. Place it inside the server folder.');
+    throw new Error('Firebase service account is missing. On Render, add FIREBASE_SERVICE_ACCOUNT_JSON. Locally, keep firebase-service-account.json inside the server folder.');
   }
 
   return JSON.parse(fs.readFileSync(FIREBASE_SERVICE_FILE, 'utf8'));
