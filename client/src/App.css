@@ -249,3 +249,50 @@
 }
 /* =============== END ADMIN DASHBOARD MOBILE TABLE FIX =============== */
 
+
+/* =============== FORCE ADMIN BUTTONS VISIBLE ON MOBILE =============== */
+@media screen and (max-width: 768px) {
+  table,
+  table thead,
+  table tbody,
+  table tr,
+  table th,
+  table td {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+  }
+
+  table thead {
+    display: none !important;
+  }
+
+  table tr {
+    margin-bottom: 1rem !important;
+    padding: 1rem !important;
+    border-radius: 16px !important;
+    background: rgba(15, 22, 38, 0.95) !important;
+    border: 1px solid rgba(0, 242, 254, 0.18) !important;
+  }
+
+  table td button,
+  table tr button,
+  tbody button {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    width: 100% !important;
+    min-height: 44px !important;
+    margin-top: 0.5rem !important;
+    padding: 0.75rem 1rem !important;
+    font-size: 0.9rem !important;
+    border-radius: 12px !important;
+    position: relative !important;
+    z-index: 999 !important;
+  }
+}
+/* =============== END FORCE ADMIN BUTTONS VISIBLE ON MOBILE =============== */
+

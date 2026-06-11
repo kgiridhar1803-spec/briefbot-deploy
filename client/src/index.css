@@ -159,3 +159,87 @@ code {
 }
 /* =============== END STRONG MOBILE RESPONSIVE FIX =============== */
 
+
+/* =============== FORCE ADMIN BUTTONS VISIBLE ON MOBILE =============== */
+@media screen and (max-width: 768px) {
+  body,
+  #root,
+  #root > div {
+    overflow-x: hidden !important;
+  }
+
+  table,
+  table thead,
+  table tbody,
+  table tr,
+  table th,
+  table td {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+  }
+
+  table thead {
+    display: none !important;
+  }
+
+  table tr {
+    margin-bottom: 1rem !important;
+    padding: 1rem !important;
+    border-radius: 16px !important;
+    background: rgba(15, 22, 38, 0.95) !important;
+    border: 1px solid rgba(0, 242, 254, 0.18) !important;
+  }
+
+  table td {
+    padding: 0.45rem 0 !important;
+    border: none !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  table td button,
+  table tr button,
+  tbody button {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    min-height: 44px !important;
+    margin-top: 0.5rem !important;
+    padding: 0.75rem 1rem !important;
+    font-size: 0.9rem !important;
+    border-radius: 12px !important;
+    text-align: center !important;
+    position: relative !important;
+    z-index: 999 !important;
+  }
+
+  table td:last-child,
+  table tr td:last-child {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 0.55rem !important;
+    width: 100% !important;
+    margin-top: 0.75rem !important;
+  }
+
+  div[style*="overflow"] {
+    overflow-x: hidden !important;
+  }
+
+  div[style*="min-width"] {
+    min-width: 0 !important;
+  }
+
+  div[style*="max-width"] {
+    max-width: 100% !important;
+  }
+}
+/* =============== END FORCE ADMIN BUTTONS VISIBLE ON MOBILE =============== */
+
