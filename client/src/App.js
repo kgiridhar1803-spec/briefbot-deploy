@@ -261,7 +261,7 @@ function App() {
     }
 
     try {
-      const response = await fetch(`http://localhost:5000/api/history/${user.id}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/history/${user.id}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -284,7 +284,7 @@ function App() {
 
     setRecentPptsLoading(true);
     try {
-      const response = await fetch(`http://localhost:5000/api/ppt/recent/${user.id}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/ppt/recent/${user.id}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -590,7 +590,7 @@ function App() {
     if (!summaryText || !url || !currentUser?.id || currentUser.role === 'admin') return null;
 
     try {
-      const response = await fetch('http://localhost:5000/api/history/save', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/history/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -643,7 +643,7 @@ function App() {
     if (!id || !currentUser?.id) return;
 
     try {
-      await fetch(`http://localhost:5000/api/history/${currentUser.id}/${id}`, {
+      await fetch(`https://briefbot-backend-giridhar.onrender.com/api/history/${currentUser.id}/${id}`, {
         method: 'DELETE'
       });
     } catch (error) {
@@ -660,7 +660,7 @@ function App() {
     }
 
     try {
-      await fetch(`http://localhost:5000/api/history/${currentUser.id}`, {
+      await fetch(`https://briefbot-backend-giridhar.onrender.com/api/history/${currentUser.id}`, {
         method: 'DELETE'
       });
     } catch (error) {
@@ -714,7 +714,7 @@ function App() {
       const result = await signInWithPopup(firebaseClientAuth, provider);
       const idToken = await result.user.getIdToken();
 
-      const response = await fetch('http://localhost:5000/api/social-login', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/social-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idToken, roleMode })
@@ -761,7 +761,7 @@ function App() {
           ? '/api/admin/login'
           : '/api/login';
 
-      const response = await fetch(`http://localhost:5000${endpoint}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -832,7 +832,7 @@ function App() {
       console.log('[Client Password Reset Error]', clientError?.code || clientError?.message);
 
       try {
-        const response = await fetch('http://localhost:5000/api/password-reset', {
+        const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/password-reset', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: cleanEmail })
@@ -902,7 +902,7 @@ function App() {
     setProfileMessage('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/change-password', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -942,7 +942,7 @@ function App() {
     setProfileMessage('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/profile/update', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/profile/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1013,7 +1013,7 @@ function App() {
     setProfileMessage('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/account/delete', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/account/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: currentUser.id })
@@ -1046,7 +1046,7 @@ function App() {
 
     if (currentUser?.id) {
       try {
-        await fetch('http://localhost:5000/api/logout', {
+        await fetch('https://briefbot-backend-giridhar.onrender.com/api/logout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: currentUser.id })
@@ -1066,7 +1066,7 @@ function App() {
     if (!currentUser?.id) return;
 
     try {
-      await fetch('http://localhost:5000/api/user/activity', {
+      await fetch('https://briefbot-backend-giridhar.onrender.com/api/user/activity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1087,7 +1087,7 @@ function App() {
     setAuthError('');
     setAdminActionMessage('');
     try {
-      const response = await fetch(`http://localhost:5000/api/admin/stats?adminId=${currentUser.id}&t=${Date.now()}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/admin/stats?adminId=${currentUser.id}&t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -1114,7 +1114,7 @@ function App() {
     setSelectedAdminUserId(userId);
 
     try {
-      const response = await fetch(`http://localhost:5000/api/admin/users/${userId}/progress?adminId=${currentUser.id}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/admin/users/${userId}/progress?adminId=${currentUser.id}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -1149,7 +1149,7 @@ function App() {
     setAdminActionMessage('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/admin/users/delete', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/admin/users/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1349,7 +1349,7 @@ function App() {
     if (!assessmentId) return;
     if (!silent) setAssessmentLoading(true);
     try {
-      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentId}?t=${Date.now()}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentId}?t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
       });
       const data = await response.json();
@@ -1398,7 +1398,7 @@ function App() {
   const loadAssessmentLeaderboard = async (assessmentId) => {
     if (!assessmentId) return [];
     try {
-      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentId}/leaderboard?t=${Date.now()}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentId}/leaderboard?t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -1424,7 +1424,7 @@ function App() {
     setAssessmentStartedAt(Date.now());
 
     try {
-      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentId}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentId}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -1534,7 +1534,7 @@ function App() {
   const handleExitAssessment = async () => {
     try {
       if (assessmentData?.assessmentMode === 'battle' && assessmentData?.roomCode && currentUser?.id) {
-        await fetch(`http://localhost:5000/api/battle-rooms/${assessmentData.roomCode}/quit`, {
+        await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${assessmentData.roomCode}/quit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: currentUser.id })
@@ -2057,7 +2057,7 @@ function App() {
     setAssessmentStartedAt(mode === 'solo' ? Date.now() : null);
 
     try {
-      const response = await fetch('http://localhost:5000/api/assessments/create', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/assessments/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2112,7 +2112,7 @@ function App() {
     setAssessmentStartedAt(null);
 
     try {
-      const response = await fetch('http://localhost:5000/api/battle-room/join', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/battle-room/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomCode: code, userId: currentUser.id })
@@ -2149,7 +2149,7 @@ function App() {
     setBattleLoading(true);
     setAssessmentError('');
     try {
-      const response = await fetch(`http://localhost:5000/api/battle-room/${assessmentData.id}/start`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-room/${assessmentData.id}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: currentUser.id })
@@ -2227,7 +2227,7 @@ function App() {
     try {
       await refreshAssessmentRoom(assessmentData.id, true);
 
-      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentData.id}/boss/start`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentData.id}/boss/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
         body: JSON.stringify({ userId: currentUser.id })
@@ -2261,7 +2261,7 @@ function App() {
     setBossLoading(true);
     setBossError('');
     try {
-      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentData.id}/boss/submit`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentData.id}/boss/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2295,7 +2295,7 @@ function App() {
     setAssessmentError('');
 
     try {
-      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentData.id}/submit`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentData.id}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2426,7 +2426,7 @@ function App() {
       const finalUrl = inputUrl.trim();
       console.log('[FRONTEND URL SENDING]', finalUrl);
 
-      const response = await fetch('http://localhost:5000/api/analyze', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/analyze', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2480,7 +2480,7 @@ function App() {
     setChatLoading(true);
 
     try {
-      const response = await fetch('http://localhost:5000/api/chat', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userText, contextSummary: analysisData, chatHistory: chatHistory })
@@ -2506,7 +2506,7 @@ function App() {
     setGeneratedAnswers('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/generate-questions', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/generate-questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2535,7 +2535,7 @@ function App() {
     setGeneratedAnswers('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/generate-answers', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/generate-answers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2593,7 +2593,7 @@ function App() {
   const generatePptImagesForPairs = async (basePlan, options = {}) => {
     if (!basePlan?.slides?.length) return basePlan;
 
-    const response = await fetch('http://localhost:5000/api/ppt/images/generate', {
+    const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/ppt/images/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2644,7 +2644,7 @@ function App() {
     setPptPlan(null);
 
     try {
-      const response = await fetch('http://localhost:5000/api/ppt/plan', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/ppt/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3094,7 +3094,7 @@ function App() {
     if (actionType === 'saved') setPptSaveMessage('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/ppt/export', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/ppt/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3888,7 +3888,7 @@ function App() {
     setCompareResult(null);
 
     try {
-      const response = await fetch('http://localhost:5000/api/compare-videos', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/compare-videos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4021,7 +4021,7 @@ function App() {
   const loadAdminBattleStats = async () => {
     if (!currentUser?.id || currentUser.role !== 'admin') return;
     try {
-      const response = await fetch(`http://localhost:5000/api/admin/battle-room-stats?adminId=${currentUser.id}&t=${Date.now()}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/admin/battle-room-stats?adminId=${currentUser.id}&t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -4051,7 +4051,7 @@ function App() {
     setBattleAnswers({});
 
     try {
-      const response = await fetch('http://localhost:5000/api/battle-rooms/create', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4094,7 +4094,7 @@ function App() {
     setBattleAnswers({});
 
     try {
-      const response = await fetch('http://localhost:5000/api/battle-rooms/join', {
+      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4147,7 +4147,7 @@ function App() {
     if (!cleanCode) return null;
 
     try {
-      const response = await fetch(`http://localhost:5000/api/battle-rooms/${cleanCode}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${cleanCode}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -4167,7 +4167,7 @@ function App() {
     setBattleRoomError('');
 
     try {
-      const response = await fetch(`http://localhost:5000/api/battle-rooms/${battleRoom.roomCode}/start`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${battleRoom.roomCode}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: currentUser.id })
@@ -4228,7 +4228,7 @@ function App() {
     setBattleRoomError('');
 
     try {
-      const response = await fetch(`http://localhost:5000/api/battle-rooms/${battleRoom.roomCode}/submit`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${battleRoom.roomCode}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4254,7 +4254,7 @@ function App() {
   const handleQuitBattleRoom = async () => {
     if (battleRoom?.roomCode && currentUser?.id) {
       try {
-        await fetch(`http://localhost:5000/api/battle-rooms/${battleRoom.roomCode}/quit`, {
+        await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${battleRoom.roomCode}/quit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: currentUser.id })
@@ -4281,7 +4281,7 @@ function App() {
   const saveTestHistoryToProfile = async (payload = {}) => {
     if (!currentUser?.id) return;
     try {
-      await fetch(`http://localhost:5000/api/users/${currentUser.id}/test-history`, {
+      await fetch(`https://briefbot-backend-giridhar.onrender.com/api/users/${currentUser.id}/test-history`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -4295,7 +4295,7 @@ function App() {
     if (!currentUser?.id) return;
     setTestHistoryLoading(true);
     try {
-      const response = await fetch(`http://localhost:5000/api/users/${currentUser.id}/test-history?mode=${mode}&t=${Date.now()}`, {
+      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/users/${currentUser.id}/test-history?mode=${mode}&t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
