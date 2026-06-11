@@ -3324,8 +3324,54 @@ app.get('/api/admin/users/:userId/progress', async (req, res) => {
       return res.status(403).json({ error: 'Admin access required.' });
     }
 
-    const progress = await getUserProgressDetails(req.params.userId);
-    return res.json({ ok: true, ...progress });
+    try {
+      const progress = await getUserProgressDetails(req.params.userId);
+      return res.json({ ok: true, ...progress });
+    } catch (progressError) {
+      console.error('[Admin User Progress Details Warning]', progressError.message);
+
+      let fallbackUser = null;
+      try {
+        const userDoc = await usersCollection.doc(String(req.params.userId || '').trim()).get();
+        if (userDoc.exists) {
+          fallbackUser = safeUser({ id: userDoc.id, ...userDoc.data() });
+        }
+      } catch (fallbackError) {
+        console.error('[Admin User Progress Fallback Warning]', fallbackError.message);
+      }
+
+      return res.json({
+        ok: true,
+        warning: progressError.message,
+        user: fallbackUser || {
+          id: String(req.params.userId || ''),
+          name: 'User',
+          email: '',
+          role: 'user'
+        },
+        summaries: [],
+        ppts: [],
+        attempts: [],
+        battleRooms: [],
+        smartCompares: [],
+        stats: {
+          summaryCount: Number(fallbackUser?.summariesGenerated || 0),
+          pptCount: Number(fallbackUser?.pptsGenerated || 0),
+          assessmentCount: 0,
+          assessmentsCreated: 0,
+          battleRoomCount: Number(fallbackUser?.battleRoomsGenerated || 0),
+          smartCompareCount: Number(fallbackUser?.smartCompares || 0),
+          attemptCount: 0,
+          averageScore: 0,
+          highestScore: 0,
+          lowestScore: 0,
+          lastScore: 0,
+          lastAttemptAt: null,
+          lastSummaryAt: null,
+          lastPptAt: null
+        }
+      });
+    }
   } catch (error) {
     console.error('[Admin User Progress Error]', error);
     return res.status(500).json({ error: error.message });
