@@ -1673,9 +1673,10 @@ async function handleFirebaseLogin(req, res, expectedRole) {
 
 app.post('/api/social-login', async (req, res) => {
   try {
-    const { idToken, provider, expectedRole, roleMode } = req.body || {};
+    const { idToken, provider, expectedRole, roleMode, authIntent } = req.body || {};
     const cleanToken = String(idToken || '').trim();
     const roleToCheck = expectedRole === 'admin' || roleMode === 'admin' ? 'admin' : 'user';
+    const intent = ['signup', 'register'].includes(String(authIntent || '').toLowerCase()) ? 'signup' : 'signin';
 
     if (!cleanToken) {
       return res.status(400).json({ error: 'Firebase ID token is required.' });
@@ -1693,10 +1694,33 @@ app.post('/api/social-login', async (req, res) => {
     }
 
     const ref = usersCollection.doc(uid);
-    const doc = await ref.get();
+    let docRef = ref;
+    let doc = await docRef.get();
 
     if (!doc.exists) {
-      await ref.set({
+      const existingEmailSnapshot = await usersCollection.where('email', '==', email).limit(1).get();
+      if (!existingEmailSnapshot.empty) {
+        doc = existingEmailSnapshot.docs[0];
+        docRef = doc.ref;
+      }
+    }
+
+    if (!doc.exists && intent !== 'signup') {
+      return res.status(404).json({
+        error: '⚠️ This Google account is not registered. Please sign up first, then use Google Sign In.',
+        requiresSignup: true
+      });
+    }
+
+    if (doc.exists && intent === 'signup') {
+      return res.status(409).json({
+        error: '✅ This Google account is already registered. Please use Sign In with Google.',
+        alreadyRegistered: true
+      });
+    }
+
+    if (!doc.exists && intent === 'signup') {
+      await docRef.set({
         uid,
         name,
         email,
@@ -1711,13 +1735,15 @@ app.post('/api/social-login', async (req, res) => {
         questionsGenerated: 0,
         answersGenerated: 0,
         chatsSent: 0,
+        assessmentsAttempted: 0,
+        pptsGenerated: 0,
         createdAt: nowISO(),
         lastLoginAt: null,
         updatedAt: nowISO()
       });
     } else {
-      await ref.set({
-        uid,
+      await docRef.set({
+        googleUid: uid,
         name: doc.data()?.name || name,
         email,
         provider: providerName,
@@ -1728,7 +1754,7 @@ app.post('/api/social-login', async (req, res) => {
       }, { merge: true });
     }
 
-    const freshDoc = await ref.get();
+    const freshDoc = await docRef.get();
     const profile = { id: freshDoc.id, ...freshDoc.data() };
 
     if (roleToCheck === 'admin' && profile.role !== 'admin') {
@@ -1740,7 +1766,7 @@ app.post('/api/social-login', async (req, res) => {
     }
 
     const loginCount = Number(profile.loginCount || 0) + 1;
-    await ref.update({
+    await docRef.update({
       isLoggedIn: true,
       loginCount,
       lastLoginAt: nowISO(),
@@ -1748,13 +1774,17 @@ app.post('/api/social-login', async (req, res) => {
     });
 
     await addActivity({
-      userId: uid,
-      type: roleToCheck === 'admin' ? 'admin_social_login' : 'social_login',
+      userId: freshDoc.id,
+      type: roleToCheck === 'admin' ? 'admin_social_login' : intent === 'signup' ? 'social_signup' : 'social_login',
       meta: { provider: providerName }
     });
 
-    const updatedDoc = await ref.get();
-    return res.json({ ok: true, user: safeUser({ id: updatedDoc.id, ...updatedDoc.data() }) });
+    const updatedDoc = await docRef.get();
+    return res.json({
+      ok: true,
+      accountCreated: intent === 'signup',
+      user: safeUser({ id: updatedDoc.id, ...updatedDoc.data() })
+    });
   } catch (error) {
     console.error('[Firebase Social Login Error]', error.message);
     return res.status(401).json({ error: error.message || 'Google sign in failed.' });
@@ -4640,70 +4670,133 @@ function escapeSvgText(value = '') {
 function makeAiSlideSvgDataUri(slide = {}, index = 0) {
   const source = `${slide.title || ''} ${slide.imagePrompt || ''} ${(slide.points || []).join(' ')}`.toLowerCase();
   const has = (words = []) => words.some((word) => source.includes(word));
+  const cleanTitle = escapeSvgText(String(slide.title || `Slide ${index + 1}`).replace(/[^a-zA-Z0-9+.#\s-]/g, ' ').replace(/\s+/g, ' ').trim() || `Slide ${index + 1}`);
 
   let palette = ['0F172A', '2563EB', '38BDF8', 'E0F2FE'];
   let visual = '';
+  let label1 = 'KEY IDEA';
+  let label2 = 'PROCESS';
+  let label3 = 'RESULT';
 
-  if (has(['food', 'nutrition', 'diet', 'meal', 'vegetable', 'fitness', 'health'])) {
-    palette = ['0B3B2E', '22C55E', 'A7F3D0', 'ECFDF5'];
-    visual = `
-      <ellipse cx="905" cy="360" rx="170" ry="122" fill="#ffffff" opacity="0.94"/>
-      <ellipse cx="905" cy="360" rx="128" ry="88" fill="#DCFCE7"/>
-      <circle cx="850" cy="340" r="28" fill="#F97316"/>
-      <circle cx="895" cy="302" r="23" fill="#FACC15"/>
-      <circle cx="960" cy="336" r="25" fill="#16A34A"/>
-      <circle cx="928" cy="388" r="25" fill="#EF4444"/>
-      <path d="M822 408 C875 384 932 410 1002 374" fill="none" stroke="#166534" stroke-width="18" stroke-linecap="round" opacity="0.95"/>
-    `;
-  } else if (has(['budget', 'expense', 'money', 'cost', 'price', 'finance', 'sales'])) {
-    palette = ['111827', '8B5CF6', '22D3EE', 'EDE9FE'];
-    visual = `
-      <rect x="780" y="240" width="230" height="178" rx="30" fill="#ffffff" opacity="0.93"/>
-      <rect x="818" y="350" width="34" height="42" rx="10" fill="#A78BFA"/>
-      <rect x="872" y="318" width="34" height="74" rx="10" fill="#22D3EE"/>
-      <rect x="926" y="280" width="34" height="112" rx="10" fill="#34D399"/>
-      <path d="M820 280 C860 242 900 240 946 216" fill="none" stroke="#8B5CF6" stroke-width="12" stroke-linecap="round"/>
-      <circle cx="948" cy="216" r="13" fill="#8B5CF6"/>
-    `;
-  } else if (has(['education', 'study', 'student', 'learning', 'lecture', 'class', 'school'])) {
-    palette = ['0B1120', '7C3AED', '38BDF8', 'E0E7FF'];
-    visual = `
-      <rect x="775" y="245" width="240" height="162" rx="28" fill="#F8FAFC" opacity="0.95"/>
-      <rect x="812" y="278" width="78" height="98" rx="10" fill="#C4B5FD"/>
-      <rect x="904" y="278" width="78" height="98" rx="10" fill="#7DD3FC"/>
-      <rect x="891" y="278" width="14" height="98" rx="7" fill="#E2E8F0"/>
-      <circle cx="950" cy="224" r="31" fill="#F59E0B"/>
-      <rect x="943" y="184" width="15" height="34" rx="7" fill="#FDE68A"/>
-    `;
-  } else if (has(['travel', 'city', 'bangalore', 'journey', 'location', 'welcome', 'month'])) {
-    palette = ['0F172A', '06B6D4', 'F472B6', 'ECFEFF'];
-    visual = `
-      <rect x="780" y="250" width="236" height="154" rx="28" fill="#ffffff" opacity="0.94"/>
-      <path d="M816 366 C860 302 902 352 950 292 C972 268 986 252 1008 246" fill="none" stroke="#06B6D4" stroke-width="16" stroke-linecap="round"/>
-      <circle cx="816" cy="366" r="17" fill="#F472B6"/>
-      <circle cx="1008" cy="246" r="17" fill="#22C55E"/>
-      <circle cx="902" cy="320" r="13" fill="#F59E0B"/>
-    `;
-  } else if (has(['technology', 'ai', 'data', 'software', 'computer', 'system', 'coding', 'sql'])) {
+  if (has(['for loop', 'for-loop', 'while loop', 'loops', 'looping', 'iteration', 'iterate', 'iterative', 'programming', 'coding', 'code', 'javascript', 'python', 'java', 'c++', 'algorithm', 'array', 'arrays', 'variable', 'control flow', 'compiler'])) {
     palette = ['020617', '0EA5E9', 'A855F7', 'E0F2FE'];
+    label1 = 'START';
+    label2 = 'LOOP';
+    label3 = 'REPEAT';
     visual = `
-      <rect x="780" y="248" width="235" height="158" rx="28" fill="#E0F2FE" opacity="0.94"/>
-      <rect x="820" y="282" width="156" height="88" rx="16" fill="#0F172A"/>
-      <circle cx="852" cy="326" r="12" fill="#22D3EE"/>
-      <circle cx="898" cy="326" r="12" fill="#A855F7"/>
-      <circle cx="944" cy="326" r="12" fill="#22C55E"/>
-      <path d="M852 326 L778 252 M898 326 L920 226 M944 326 L1012 270" fill="none" stroke="#38BDF8" stroke-width="10" stroke-linecap="round" opacity="0.85"/>
+      <rect x="725" y="158" width="410" height="315" rx="34" fill="#E0F2FE" opacity="0.98"/>
+      <rect x="775" y="205" width="310" height="170" rx="22" fill="#0F172A"/>
+      <rect x="808" y="240" width="86" height="36" rx="18" fill="#22D3EE" opacity="0.96"/>
+      <rect x="918" y="240" width="132" height="36" rx="18" fill="#A855F7" opacity="0.96"/>
+      <rect x="842" y="304" width="168" height="38" rx="19" fill="#34D399" opacity="0.96"/>
+      <path d="M815 402 C895 470 1036 434 1048 336" fill="none" stroke="#38BDF8" stroke-width="17" stroke-linecap="round"/>
+      <path d="M1039 334 L1072 356 L1028 378" fill="none" stroke="#38BDF8" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="845" y="392" width="176" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+    `;
+  } else if (has(['database', 'sql', 'server', 'data structure', 'data structures', 'data analytics', 'machine learning', 'artificial intelligence', 'ai', 'technology', 'software', 'computer', 'system'])) {
+    palette = ['020617', '0EA5E9', 'A855F7', 'E0F2FE'];
+    label1 = 'DATA';
+    label2 = 'SYSTEM';
+    label3 = 'INSIGHT';
+    visual = `
+      <rect x="735" y="170" width="395" height="292" rx="34" fill="#E0F2FE" opacity="0.97"/>
+      <circle cx="930" cy="260" r="68" fill="#0F172A"/>
+      <circle cx="930" cy="260" r="31" fill="#38BDF8"/>
+      <circle cx="810" cy="378" r="32" fill="#A855F7"/>
+      <circle cx="1052" cy="378" r="32" fill="#22C55E"/>
+      <path d="M884 303 L830 356 M976 303 L1032 356" fill="none" stroke="#0F172A" stroke-width="12" stroke-linecap="round" opacity="0.85"/>
+      <rect x="845" y="405" width="170" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+    `;
+  } else if (has(['mobile', 'phone', 'smartphone', 'android', 'iphone', 'app', 'camera', 'device'])) {
+    palette = ['0F172A', '06B6D4', '6366F1', 'ECFEFF'];
+    label1 = 'MOBILE';
+    label2 = 'APP';
+    label3 = 'DEVICE';
+    visual = `
+      <rect x="835" y="154" width="190" height="332" rx="34" fill="#E0F2FE" opacity="0.98"/>
+      <rect x="864" y="198" width="132" height="232" rx="20" fill="#0F172A"/>
+      <circle cx="930" cy="455" r="13" fill="#94A3B8"/>
+      <circle cx="930" cy="315" r="58" fill="#06B6D4" opacity="0.86"/>
+      <rect x="798" y="505" width="265" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+    `;
+  } else if (has(['study', 'education', 'student', 'learning', 'book', 'books', 'lecture', 'class', 'school', 'college', 'exam', 'notes'])) {
+    palette = ['0B1120', '7C3AED', '38BDF8', 'E0E7FF'];
+    label1 = 'LEARN';
+    label2 = 'PRACTICE';
+    label3 = 'REVISE';
+    visual = `
+      <rect x="740" y="188" width="390" height="245" rx="34" fill="#F8FAFC" opacity="0.97"/>
+      <rect x="795" y="240" width="116" height="142" rx="16" fill="#C4B5FD"/>
+      <rect x="948" y="240" width="116" height="142" rx="16" fill="#7DD3FC"/>
+      <rect x="924" y="240" width="18" height="142" rx="9" fill="#E2E8F0"/>
+      <circle cx="930" cy="188" r="34" fill="#F59E0B"/>
+      <rect x="815" y="455" width="230" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+    `;
+  } else if (has(['budget', 'expense', 'money', 'cost', 'price', 'finance', 'business', 'income', 'saving', 'savings'])) {
+    palette = ['111827', '8B5CF6', '22D3EE', 'EDE9FE'];
+    label1 = 'PLAN';
+    label2 = 'SAVE';
+    label3 = 'GROW';
+    visual = `
+      <rect x="748" y="184" width="374" height="260" rx="34" fill="#ffffff" opacity="0.96"/>
+      <rect x="802" y="338" width="42" height="58" rx="12" fill="#A78BFA"/>
+      <rect x="878" y="298" width="42" height="98" rx="12" fill="#22D3EE"/>
+      <rect x="954" y="250" width="42" height="146" rx="12" fill="#34D399"/>
+      <path d="M804 280 C858 238 914 236 982 204" fill="none" stroke="#8B5CF6" stroke-width="13" stroke-linecap="round"/>
+      <rect x="835" y="464" width="200" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+    `;
+  } else if (has(['travel', 'city', 'bangalore', 'journey', 'location', 'map', 'route'])) {
+    palette = ['0F172A', '06B6D4', 'F472B6', 'ECFEFF'];
+    label1 = 'TRAVEL';
+    label2 = 'ROUTE';
+    label3 = 'PLACE';
+    visual = `
+      <rect x="748" y="196" width="374" height="226" rx="34" fill="#ffffff" opacity="0.96"/>
+      <path d="M800 362 C858 298 913 352 970 292 C1002 258 1030 246 1080 232" fill="none" stroke="#06B6D4" stroke-width="18" stroke-linecap="round"/>
+      <circle cx="800" cy="362" r="19" fill="#F472B6"/>
+      <circle cx="1080" cy="232" r="19" fill="#22C55E"/>
+      <rect x="840" y="452" width="190" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+    `;
+  } else if (has(['fitness', 'gym', 'workout', 'exercise', 'health'])) {
+    palette = ['0B3B2E', '22C55E', '06B6D4', 'ECFDF5'];
+    label1 = 'FITNESS';
+    label2 = 'ENERGY';
+    label3 = 'HEALTH';
+    visual = `
+      <rect x="748" y="200" width="374" height="215" rx="34" fill="#ffffff" opacity="0.96"/>
+      <rect x="822" y="296" width="210" height="24" rx="12" fill="#0F172A"/>
+      <circle cx="792" cy="308" r="34" fill="#22C55E"/>
+      <circle cx="1062" cy="308" r="34" fill="#06B6D4"/>
+      <rect x="842" y="445" width="186" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+    `;
+  } else if (has(['recipe', 'cooking', 'cook', 'food', 'meal', 'nutrition', 'diet', 'protein', 'vegetable', 'calorie', 'chicken', 'egg', 'rice', 'spice'])) {
+    palette = ['0B3B2E', '22C55E', 'F97316', 'ECFDF5'];
+    label1 = 'FOOD';
+    label2 = 'NUTRITION';
+    label3 = 'HEALTH';
+    visual = `
+      <ellipse cx="930" cy="322" rx="172" ry="124" fill="#ffffff" opacity="0.96"/>
+      <ellipse cx="930" cy="322" rx="125" ry="86" fill="#DCFCE7"/>
+      <circle cx="875" cy="300" r="28" fill="#F97316"/>
+      <circle cx="925" cy="268" r="23" fill="#FACC15"/>
+      <circle cx="990" cy="305" r="25" fill="#16A34A"/>
+      <circle cx="950" cy="362" r="25" fill="#EF4444"/>
+      <rect x="826" y="472" width="208" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
     `;
   } else {
     palette = ['0F172A', 'EC4899', '22C55E', 'FDF2F8'];
     visual = `
-      <circle cx="890" cy="314" r="104" fill="#ffffff" opacity="0.9"/>
-      <circle cx="846" cy="300" r="31" fill="#EC4899" opacity="0.9"/>
-      <circle cx="932" cy="286" r="25" fill="#22C55E" opacity="0.9"/>
-      <circle cx="916" cy="356" r="37" fill="#38BDF8" opacity="0.9"/>
-      <path d="M820 388 C876 336 940 354 982 312" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" opacity="0.55"/>
+      <circle cx="930" cy="304" r="112" fill="#ffffff" opacity="0.92"/>
+      <circle cx="878" cy="288" r="34" fill="#EC4899" opacity="0.92"/>
+      <circle cx="972" cy="274" r="29" fill="#22C55E" opacity="0.92"/>
+      <circle cx="954" cy="354" r="41" fill="#38BDF8" opacity="0.92"/>
+      <rect x="820" y="466" width="220" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
     `;
   }
+
+  const safeLabel1 = escapeSvgText(label1);
+  const safeLabel2 = escapeSvgText(label2);
+  const safeLabel3 = escapeSvgText(label3);
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
     <defs>
@@ -4713,18 +4806,34 @@ function makeAiSlideSvgDataUri(slide = {}, index = 0) {
         <stop offset="100%" stop-color="#${palette[2]}"/>
       </linearGradient>
       <radialGradient id="glow" cx="50%" cy="50%" r="60%">
-        <stop offset="0%" stop-color="#ffffff" stop-opacity="0.50"/>
+        <stop offset="0%" stop-color="#ffffff" stop-opacity="0.46"/>
         <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
       </radialGradient>
+      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="18" stdDeviation="16" flood-color="#020617" flood-opacity="0.28"/>
+      </filter>
     </defs>
     <rect width="1280" height="720" fill="url(#bg)"/>
-    <circle cx="170" cy="130" r="180" fill="url(#glow)"/>
-    <circle cx="1140" cy="620" r="220" fill="url(#glow)" opacity="0.6"/>
-    <rect x="82" y="86" width="1116" height="548" rx="42" fill="#0B1220" opacity="0.14"/>
-    <path d="M120 502 C255 418 330 544 470 430 C610 316 730 440 875 332 C965 265 1045 250 1160 210" fill="none" stroke="#ffffff" stroke-width="18" opacity="0.16" stroke-linecap="round"/>
-    <circle cx="290" cy="285" r="122" fill="#ffffff" opacity="0.12"/>
-    <circle cx="392" cy="390" r="74" fill="#ffffff" opacity="0.10"/>
-    <g>${visual}</g>
+    <circle cx="155" cy="130" r="190" fill="url(#glow)"/>
+    <circle cx="1135" cy="625" r="230" fill="url(#glow)" opacity="0.62"/>
+    <rect x="72" y="78" width="1136" height="565" rx="48" fill="#0B1220" opacity="0.16"/>
+    <path d="M120 510 C255 418 338 548 486 428 C622 318 742 442 895 326 C984 258 1048 244 1160 210" fill="none" stroke="#ffffff" stroke-width="18" opacity="0.17" stroke-linecap="round"/>
+    <g filter="url(#shadow)">
+      <rect x="110" y="118" width="520" height="90" rx="28" fill="#ffffff" opacity="0.95"/>
+      <text x="145" y="174" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="800" fill="#0F172A">${cleanTitle}</text>
+      <rect x="132" y="262" width="145" height="56" rx="28" fill="#ffffff" opacity="0.92"/>
+      <text x="165" y="299" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#0F172A">${safeLabel1}</text>
+      <rect x="310" y="334" width="180" height="56" rx="28" fill="#ffffff" opacity="0.92"/>
+      <text x="344" y="371" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#0F172A">${safeLabel2}</text>
+      <rect x="165" y="438" width="172" height="56" rx="28" fill="#ffffff" opacity="0.92"/>
+      <text x="199" y="475" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#0F172A">${safeLabel3}</text>
+      <path d="M275 290 C346 290 350 356 310 362" fill="none" stroke="#ffffff" stroke-width="10" opacity="0.62" stroke-linecap="round"/>
+      <path d="M490 362 C540 390 505 470 337 466" fill="none" stroke="#ffffff" stroke-width="10" opacity="0.62" stroke-linecap="round"/>
+      <g>${visual}</g>
+      <text x="872" y="424" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0F172A" text-anchor="middle">${safeLabel1}</text>
+      <text x="930" y="424" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0F172A" text-anchor="middle">${safeLabel2}</text>
+      <text x="988" y="424" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0F172A" text-anchor="middle">${safeLabel3}</text>
+    </g>
   </svg>`;
 
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
@@ -5058,9 +5167,12 @@ app.post('/api/ppt/images/generate', async (req, res) => {
       if (!group.length) continue;
 
       const prompt = buildPptImagePromptForSlides(group, Math.floor(i / everyN) + 1);
+      const useSafeEnglishImages = String(process.env.PPT_SAFE_ENGLISH_IMAGES || 'true').toLowerCase() !== 'false';
 
       try {
-        const imageDataUri = await generateStabilityPptImageDataUri(prompt);
+        const imageDataUri = useSafeEnglishImages
+          ? makeAiSlideSvgDataUri(group[0], i)
+          : await generateStabilityPptImageDataUri(prompt);
         generatedCount += 1;
 
         for (let offset = 0; offset < group.length; offset++) {
@@ -5070,7 +5182,9 @@ app.post('/api/ppt/images/generate', async (req, res) => {
             imageMode: 'ai',
             aiImageData: imageDataUri,
             imageUrl: '',
-            imagePrompt: prompt
+            imagePrompt: useSafeEnglishImages
+              ? 'Safe English visual generated locally. Text is rendered by Brief Bot, not AI image text.'
+              : prompt
           };
         }
       } catch (imageError) {

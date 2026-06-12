@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { getAuth, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
 
 
 const firebaseConfig = {
@@ -796,11 +796,12 @@ function App() {
       provider.setCustomParameters({ prompt: 'select_account' });
       const result = await signInWithPopup(firebaseClientAuth, provider);
       const idToken = await result.user.getIdToken();
+      const authIntent = authMode === 'register' ? 'signup' : 'signin';
 
       const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/social-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idToken, roleMode })
+        body: JSON.stringify({ idToken, roleMode, authIntent })
       });
 
       const text = await response.text();
@@ -811,7 +812,18 @@ function App() {
         throw new Error('Social login backend returned invalid response. Restart backend and try again.');
       }
 
-      if (!response.ok) throw new Error(data.error || 'Google sign in failed.');
+      if (!response.ok) {
+        if (data?.requiresSignup) {
+          setAuthMode('register');
+        }
+        try {
+          await signOut(firebaseClientAuth);
+        } catch (signOutError) {
+          console.log('Google sign out after blocked login skipped:', signOutError.message);
+        }
+        throw new Error(data.error || 'Google sign in failed.');
+      }
+
       finishAuthSuccess(data.user);
     } catch (error) {
       setAuthError(formatAuthFriendlyError(error));
@@ -3864,7 +3876,7 @@ function App() {
                     }}
                   >
                     <span className="auth-option-content">
-                      <span className="auth-option-left"><span className="auth-option-icon google-icon">G</span><span>Continue with Google</span></span>
+                      <span className="auth-option-left"><span className="auth-option-icon google-icon">G</span><span>Sign in with Google</span></span>
                       <span>→</span>
                     </span>
                   </button>
@@ -4013,7 +4025,7 @@ function App() {
                       fontWeight: '900'
                     }}
                    className="simple-btn-glow">
-                    G Continue with Google
+                    {isRegister ? 'G Sign up with Google' : 'G Sign in with Google'}
                   </button>
                 )}
 
@@ -5578,7 +5590,7 @@ function App() {
                     <span style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.10)' }} />
                   </div>
                   <button type="button" onClick={() => handleGoogleSignIn('user')} disabled={authLoading} style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.16)', color: '#FFF', borderRadius: '14px', padding: '0.95rem', cursor: authLoading ? 'not-allowed' : 'pointer', fontWeight: '900', opacity: authLoading ? 0.7 : 1 }} className="simple-btn-glow">
-                    G Continue with Google
+                    {isRegister ? 'G Sign up with Google' : 'G Sign in with Google'}
                   </button>
                 </>
               )}
