@@ -758,6 +758,25 @@ function App() {
 
   const isValidEmail = (email) => /\S+@\S+\.\S+/.test(String(email || '').trim());
 
+  const formatAuthFriendlyError = (error) => {
+    const rawMessage = String(error?.message || error?.code || 'Google sign in failed.');
+    const lowerMessage = rawMessage.toLowerCase();
+
+    if (lowerMessage.includes('unauthorized-domain') || lowerMessage.includes('unauthorised domain')) {
+      return 'Google login is blocked because this website domain is not added in Firebase Authorized domains. Add briefbot-frontend-giridhar.vercel.app in Firebase Console → Authentication → Settings → Authorized domains.';
+    }
+
+    if (lowerMessage.includes('popup-closed-by-user')) {
+      return 'Google sign in was closed before completion.';
+    }
+
+    if (lowerMessage.includes('popup-blocked')) {
+      return 'Popup was blocked. Allow popups for this site and try Google sign in again.';
+    }
+
+    return rawMessage;
+  };
+
   const finishAuthSuccess = (user) => {
     setCurrentUser(user);
     localStorage.setItem('briefBotCurrentUser', JSON.stringify(user));
@@ -795,7 +814,7 @@ function App() {
       if (!response.ok) throw new Error(data.error || 'Google sign in failed.');
       finishAuthSuccess(data.user);
     } catch (error) {
-      setAuthError(error.message || 'Google sign in failed.');
+      setAuthError(formatAuthFriendlyError(error));
     } finally {
       setAuthLoading(false);
     }
@@ -1909,8 +1928,8 @@ function App() {
           ) : !currentUserQualified && !bossResult ? (
             <div style={{ display: 'grid', gap: '1rem' }}>
               <div style={{ background: 'rgba(15,23,42,0.76)', border: '1px solid rgba(251,191,36,0.22)', borderRadius: '20px', padding: '1.35rem' }}>
-                <h3 style={{ color: '#FFF7ED', margin: 0, fontWeight: '950' }}>Only the top battle players can enter Boss Challenge</h3>
-                <p style={{ color: '#FED7AA', margin: '0.45rem 0 0 0', lineHeight: '1.65' }}>You can still watch the qualifiers below. Score higher in the next Battle Room to unlock the fire arena.</p>
+                <h3 style={{ color: '#FCA5A5', margin: 0, fontWeight: '950', fontSize: 'clamp(1.5rem, 4vw, 2.6rem)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Better Luck Next Time</h3>
+                <p style={{ color: '#FED7AA', margin: '0.45rem 0 0 0', lineHeight: '1.65' }}>You submitted the Battle Room, but only the final Top 3 players qualify for Boss Arena. You are not qualified this time. Practice once more and try again in the next Battle Room.</p>
               </div>
               <div style={{ display: 'grid', gap: '0.8rem' }}>
                 {qualifiers.map((player, index) => (
@@ -4821,7 +4840,7 @@ function App() {
               {profileTab === 'edit' && (
                 <div>
                   <h2 style={{ margin: 0, color: '#FFF', fontSize: '1.8rem', fontWeight: '950' }}>Edit Profile</h2>
-                  <p style={{ color: '#9CA3AF', marginTop: '0.4rem' }}>Change your name and choose a profile photo from your laptop.</p>
+                  <p style={{ color: '#9CA3AF', marginTop: '0.4rem' }}>Change your name and choose a profile photo from your device.</p>
                   <form onSubmit={handleProfileUpdate} style={{ display: 'grid', gap: '1rem', marginTop: '1.4rem', maxWidth: '620px' }}>
                     <label style={{ color: '#9CA3AF', fontSize: '0.85rem', fontWeight: '800' }}>Change Name</label>
                     <input value={profileForm.name} onChange={(e) => setProfileForm((prev) => ({ ...prev, name: e.target.value }))} style={{ padding: '0.95rem', borderRadius: '12px', border: '1px solid #2D3748', backgroundColor: '#151D30', color: '#FFF', outline: 'none' }} />
@@ -4835,7 +4854,7 @@ function App() {
                         <label htmlFor="user-profile-photo-upload" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.55rem', background: 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: '#070A13', border: 'none', borderRadius: '12px', padding: '0.85rem 1.05rem', cursor: 'pointer', fontWeight: '950', boxShadow: '0 12px 28px rgba(0,242,254,0.20)', width: 'fit-content' }}>
                           📷 Choose Profile Photo
                         </label>
-                        <small style={{ color: '#9CA3AF', display: 'block', marginTop: '0.5rem' }}>Choose an image from your laptop. It will be compressed automatically.</small>
+                        <small style={{ color: '#9CA3AF', display: 'block', marginTop: '0.5rem' }}>Choose an image from your device. It will be compressed automatically.</small>
                       </div>
                     </div>
                     <button type="submit" disabled={profileLoading} style={{ background: 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: '#070A13', border: 'none', borderRadius: '12px', padding: '0.95rem', fontWeight: '950', cursor: 'pointer' }} className="simple-btn-glow">{profileLoading ? 'Saving...' : 'Save Changes'}</button>
@@ -4894,9 +4913,8 @@ function App() {
                   ) : (
                     <div style={{ backgroundColor: '#0B1120', border: '1px dashed #374151', borderRadius: '16px', padding: '2.5rem', textAlign: 'center', marginTop: '1.2rem' }}>
                       <div style={{ fontSize: '2.4rem', marginBottom: '0.7rem' }}>🎞</div>
-                      <h3 style={{ color: '#FFF', margin: 0 }}>No PPTs yet</h3>
-                      <p style={{ color: '#9CA3AF', margin: '0.5rem 0 1.2rem 0' }}>Generate a summary, create PPT slides, then click Export PPT.</p>
-                      <button type="button" onClick={() => setCurrentPage('workspace')} className="history-open-btn simple-btn-glow">Create PPT</button>
+                      <h3 style={{ color: '#FFF', margin: 0 }}>No recent PPTs found</h3>
+                      <p style={{ color: '#9CA3AF', margin: '0.5rem 0 0 0' }}>Your generated/exported PPT records will appear here automatically after you create or export a PPT.</p>
                     </div>
                   )}
                 </div>
@@ -5308,7 +5326,7 @@ function App() {
               {adminTab === 'edit' && (
                 <div>
                   <h2 style={{ margin: 0, color: '#FFF', fontSize: '1.8rem', fontWeight: '950' }}>Edit Admin Profile</h2>
-                  <p style={{ color: '#9CA3AF' }}>Change admin name and choose a profile photo from your laptop.</p>
+                  <p style={{ color: '#9CA3AF' }}>Change admin name and choose a profile photo from your device.</p>
                   <form onSubmit={handleProfileUpdate} style={{ display: 'grid', gap: '1rem', marginTop: '1.4rem', maxWidth: '620px' }}>
                     <label style={{ color: '#9CA3AF', fontSize: '0.85rem', fontWeight: '800' }}>Change Name</label>
                     <input value={profileForm.name} onChange={(e) => setProfileForm((prev) => ({ ...prev, name: e.target.value }))} style={{ padding: '0.95rem', borderRadius: '12px', border: '1px solid #2D3748', backgroundColor: '#151D30', color: '#FFF', outline: 'none' }} />
@@ -5322,7 +5340,7 @@ function App() {
                         <label htmlFor="admin-profile-photo-upload" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.55rem', background: 'linear-gradient(135deg, #A855F7, #F472B6)', color: '#FFFFFF', border: 'none', borderRadius: '12px', padding: '0.85rem 1.05rem', cursor: 'pointer', fontWeight: '950', boxShadow: '0 12px 28px rgba(168,85,247,0.24)', width: 'fit-content' }}>
                           📷 Choose Admin Photo
                         </label>
-                        <small style={{ color: '#9CA3AF', display: 'block', marginTop: '0.5rem' }}>Choose an image from your laptop. It will be compressed automatically.</small>
+                        <small style={{ color: '#9CA3AF', display: 'block', marginTop: '0.5rem' }}>Choose an image from your device. It will be compressed automatically.</small>
                       </div>
                     </div>
                     <button type="submit" disabled={profileLoading} style={{ background: 'linear-gradient(135deg, #A855F7, #F472B6)', color: '#FFF', border: 'none', borderRadius: '12px', padding: '0.95rem', fontWeight: '950', cursor: 'pointer' }} className="simple-btn-glow">{profileLoading ? 'Saving...' : 'Save Admin Profile'}</button>
@@ -5839,7 +5857,6 @@ function App() {
 
           <footer style={{ borderTop: '1px solid #1F2937', paddingTop: '2.2rem', textAlign: 'center', color: '#4B5563', fontSize: '0.9rem', marginTop: '3.2rem' }}>
             <p style={{ margin: '0 0 0.4rem 0' }}>Powered by Brief Bot • Summary • PPT • Assessment</p>
-            <p style={{ margin: 0 }}>A more stylish home page for your project showcase.</p>
           </footer>
         </div>
       )}

@@ -191,6 +191,24 @@ async function saveSummaryHistoryToFirebase({ userId, url, summary, language, su
   return safeHistoryItem(savedDoc);
 }
 
+
+function safePptItem(doc) {
+  const data = doc?.data ? doc.data() : (doc || {});
+  return {
+    id: doc?.id || data.id || `ppt-${Date.now()}`,
+    userId: data.userId || '',
+    title: data.title || 'Brief Bot PPT',
+    subtitle: data.subtitle || '',
+    actionType: data.actionType || 'generated',
+    slideCount: Number(data.slideCount || 0),
+    template: data.template || 'floral',
+    fileName: data.fileName || '',
+    savedAt: data.savedAt || data.createdAt || null,
+    createdAt: data.createdAt || null,
+    updatedAt: data.updatedAt || null
+  };
+}
+
 function safeUser(profile = {}) {
   return {
     id: profile.id || profile.uid,
@@ -4718,54 +4736,81 @@ function getPptImageApiKey() {
 }
 
 function buildPptImagePromptForSlides(slides = [], pairNumber = 1) {
-  const raw = `${slides.map((slide) => slide?.title || '').join(' ')} ${slides
-    .flatMap((slide) => Array.isArray(slide?.points) ? slide.points : [])
-    .join(' ')}`.toLowerCase();
+  const joined = slides.map((slide) => {
+    const title = slide?.title || '';
+    const imagePrompt = slide?.imagePrompt || '';
+    const points = Array.isArray(slide?.points) ? slide.points.join(' ') : '';
+    return `${title} ${imagePrompt} ${points}`;
+  }).join(' ');
 
+  const raw = joined.toLowerCase();
   const has = (words = []) => words.some((word) => raw.includes(word));
 
-  let scene = 'a realistic professional presentation background showing a clean learning workspace with a laptop, simple objects, soft natural light, modern desk, shallow depth of field';
+  const topicText = joined
+    .replace(/[^a-zA-Z0-9+.#\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 420);
 
-  if (has(['chicken', 'egg', 'spice', 'spices', 'turmeric', 'cumin', 'chilli', 'chili', 'food', 'meal', 'rice', 'nutrition', 'diet', 'protein', 'vegetable', 'calorie'])) {
-    scene = 'a realistic overhead food photography scene with cooked chicken, boiled eggs, rice, vegetables, and small bowls of colorful spices on a clean dark table, appetizing restaurant style, natural light, no packaging';
+  let scene = `a realistic professional presentation image that visually represents this exact learning topic: ${topicText}. Use symbolic objects connected to the topic, clean modern composition, no text anywhere`;
+  let strictAvoid = 'random food, meals, plates, vegetables, restaurant items, unrelated objects';
+
+  if (has(['for loop', 'for-loop', 'loops', 'looping', 'iteration', 'iterate', 'iterative', 'programming', 'coding', 'code', 'javascript', 'python', 'java', 'c++', 'algorithm', 'array', 'arrays', 'variable', 'control flow', 'compiler'])) {
+    scene = 'a realistic technology learning scene for programming loops: laptop with a completely blank abstract blue screen, glowing circular loop arrows, small connected blocks, keyboard, notebook with blank pages, modern coding classroom desk, no code text and no letters';
+    strictAvoid = 'food, meals, vegetables, fruits, plates, restaurant items, people eating, unrelated lifestyle objects';
+  } else if (has(['database', 'sql', 'server', 'data structure', 'data structures', 'data analytics', 'machine learning', 'artificial intelligence', 'ai'])) {
+    scene = 'a realistic technology education scene with server lights, laptop with blank abstract data visualization shapes, connected nodes, clean desk, blue neon lighting, no readable text';
+    strictAvoid = 'food, meals, vegetables, fruits, plates, restaurant items, unrelated household objects';
   } else if (has(['mobile', 'phone', 'smartphone', 'android', 'iphone', 'app', 'camera', 'device'])) {
-    scene = 'a realistic modern smartphone on a clean desk with a blank dark screen, wireless earbuds and soft technology lighting, premium product photography style';
+    scene = 'a realistic modern smartphone on a clean desk with a blank dark screen, wireless earbuds and soft technology lighting, premium product photography style, no screen text';
+    strictAvoid = 'food, meals, vegetables, restaurant items, random books unrelated to mobile technology';
   } else if (has(['study', 'education', 'student', 'learning', 'book', 'books', 'lecture', 'class', 'school', 'college', 'exam', 'notes'])) {
-    scene = 'a realistic study desk with closed books, a laptop with a blank screen, pencils, coffee cup, warm lamp light, neat student workspace, no visible writing';
+    scene = 'a realistic study desk with closed books, laptop with a blank screen, pencils, coffee cup, warm lamp light, neat student workspace, no visible writing';
+    strictAvoid = 'food plates, restaurant items, unrelated cooking items';
   } else if (has(['budget', 'expense', 'money', 'cost', 'price', 'finance', 'business', 'income', 'saving', 'savings'])) {
-    scene = 'a realistic finance planning scene with coins, piggy bank, wallet, and clean desk objects, professional business lighting, no paper text, no numbers';
-  } else if (has(['technology', 'ai', 'data', 'software', 'computer', 'coding', 'sql', 'database', 'server', 'cyber'])) {
-    scene = 'a realistic technology scene with laptop showing a blank abstract blue screen, server lights, soft neon lighting, modern workspace, no code text';
+    scene = 'a realistic finance planning scene with coins, piggy bank, wallet, calculator with blank display, and clean desk objects, professional business lighting, no paper text and no numbers';
+    strictAvoid = 'food, meals, vegetables, restaurant items, unrelated study objects';
   } else if (has(['travel', 'city', 'bangalore', 'journey', 'location', 'map', 'route'])) {
-    scene = 'a realistic city travel scene with backpack, coffee cup, sunglasses, and a blurred city background, cinematic natural light, no map text';
+    scene = 'a realistic city travel scene with backpack, sunglasses, and a blurred city background, cinematic natural light, no map text and no signs';
+    strictAvoid = 'food plates, restaurant menus, random cooking items';
   } else if (has(['fitness', 'gym', 'workout', 'exercise', 'health'])) {
-    scene = 'a realistic fitness scene with gym equipment, water bottle, towel, and healthy meal bowl nearby, bright natural light, no written text';
+    scene = 'a realistic fitness scene with gym equipment, water bottle, towel, bright natural light, no written text';
+    strictAvoid = 'restaurant meals, random plates, unrelated food closeups';
+  } else if (has(['recipe', 'cooking', 'cook', 'food', 'meal', 'nutrition', 'diet', 'protein', 'vegetable', 'calorie', 'chicken', 'egg', 'rice', 'spice'])) {
+    scene = 'a realistic food or nutrition learning scene directly related to the slide topic, clean table setup, natural light, no packaging and no readable text';
+    strictAvoid = 'unrelated technology objects, unrelated city travel objects';
   }
 
-  return `Generate a realistic high-quality 16:9 photo for a PowerPoint slide.
+  return `Generate one realistic high-quality 16:9 PowerPoint image.
+
+Exact slide topic:
+${topicText || 'learning presentation topic'}
 
 Scene to create:
 ${scene}
 
+Strict relevance rules:
+- The image must match the exact slide topic above.
+- Do not create random food or lifestyle images unless the topic is clearly food, cooking, diet, or nutrition.
+- If the topic is programming, loops, algorithms, data, software, or computer science, show technology/learning visuals only.
+- Use objects and scenery only; no educational poster, no infographic, no chart.
+
 Image style:
-- realistic photography, not illustration
+- realistic photography
 - professional presentation image
 - clean composition
 - cinematic natural lighting
 - high detail
-- no poster design
-- no infographic design
 
-Critical rule:
+Critical text rule:
 The image must contain absolutely zero readable or unreadable text.
 
 Do NOT include:
+- ${strictAvoid}
 - words, letters, numbers, symbols, captions, headings, labels, menus, signs
 - text on paper, books, notebooks, worksheets, receipts, menus, packaging, boards, screens, phones, laptops, clothes, walls, or any object
 - logos, brand names, watermarks
-- bullet points or chart text
-
-Only show real objects and scenery.`;
+- bullet points or chart text`;
 }
 
 async function generateStabilityPptImageDataUri(promptText = '') {
@@ -4778,7 +4823,7 @@ async function generateStabilityPptImageDataUri(promptText = '') {
 
   const formData = new FormData();
   formData.append('prompt', String(promptText || '').slice(0, 1800));
-  formData.append('negative_prompt', 'text, words, letters, numbers, digits, symbols, typography, caption, captions, subtitle, subtitles, label, labels, sign, signage, handwriting, printed text, menu, receipt, paper writing, notebook writing, book text, board writing, screen text, phone screen text, laptop screen text, package label, brand name, logo, watermark, poster, infographic, bullet points, chart labels, fake language, gibberish text, unreadable text, random characters, blurry, low quality, distorted');
+  formData.append('negative_prompt', 'unrelated food, random meal, plate of food, vegetables when topic is not food, restaurant scene when topic is not food, text, words, letters, numbers, digits, symbols, typography, caption, captions, subtitle, subtitles, label, labels, sign, signage, handwriting, printed text, menu, receipt, paper writing, notebook writing, book text, board writing, screen text, phone screen text, laptop screen text, package label, brand name, logo, watermark, poster, infographic, bullet points, chart labels, fake language, gibberish text, unreadable text, random characters, blurry, low quality, distorted');
   formData.append('aspect_ratio', '16:9');
   formData.append('output_format', 'png');
 
@@ -4839,7 +4884,7 @@ function normalizePptPlan(plan = {}) {
           ? slide.points.slice(0, 7).map((point) => String(point || '').slice(0, 220)).filter(Boolean)
           : [],
         speakerNote: String(slide.speakerNote || '').slice(0, 900),
-        imagePrompt: String(slide.imagePrompt || `AI learning visual for slide ${index + 1}`).slice(0, 180),
+        imagePrompt: String(slide.imagePrompt || `AI learning visual for slide ${index + 1}`).slice(0, 520),
         imageUrl: String(slide.imageUrl || '').trim(),
         aiImageData: String(slide.aiImageData || '').trim(),
         imageMode: String(slide.imageMode || 'ai').trim(),
@@ -4902,7 +4947,7 @@ Return ONLY JSON in this format:
         "Detailed bullet point 4"
       ],
       "speakerNote": "Short explanation for presenting this slide",
-      "imagePrompt": "Suggested image idea for this slide"
+      "imagePrompt": "Very specific visual idea directly matching this slide topic. For programming topics, mention laptop, loop arrows, flow blocks, or abstract technology visuals. Never suggest food unless the slide is about food."
     }
   ]
 }
@@ -4917,6 +4962,9 @@ Important rules:
 - Do not use markdown.
 - Do not include timestamps unless they are important. Never repeat the same timestamp twice in one sentence.
 - Make the PPT useful even if the summary is short.
+- Every imagePrompt must be directly related to the slide title and points.
+- For programming, coding, algorithms, loops, data, or computer science topics, imagePrompt must clearly request technology/learning visuals, not food or lifestyle objects.
+- Never suggest food images unless the actual summary is about food, cooking, diet, or nutrition.
 
 Presentation topic/title hint:
 ${String(title || '').slice(0, 200)}
@@ -5140,29 +5188,46 @@ function getPptFontStyleMetaBackend(style = 'modern') {
   return map[style] || map.modern;
 }
 
-async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Presentation', actionType = 'exported', slideCount = 0, template = 'floral' } = {}) {
+async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Presentation', subtitle = '', actionType = 'exported', slideCount = 0, template = 'floral', fileName = '', pptPlan = null } = {}) {
   try {
     const cleanUserId = String(userId || '').trim();
-    if (!cleanUserId || !db) {
-      return null;
-    }
+    if (!cleanUserId) return null;
+
+    const finalTitle = String(title || pptPlan?.title || 'Brief Bot Presentation').slice(0, 160);
+    const finalSubtitle = String(subtitle || pptPlan?.subtitle || '').slice(0, 220);
+    const finalSlideCount = Number(slideCount || pptPlan?.slides?.length || 0);
+    const finalTemplate = String(template || 'floral').slice(0, 40);
+    const finalActionType = String(actionType || 'exported').slice(0, 40);
+    const createdAt = nowISO();
 
     const record = {
       userId: cleanUserId,
-      title: String(title || 'Brief Bot Presentation').slice(0, 160),
-      actionType: String(actionType || 'exported').slice(0, 40),
-      slideCount: Number(slideCount || 0),
-      template: String(template || 'floral').slice(0, 40),
-      createdAt: new Date().toISOString()
+      title: finalTitle,
+      subtitle: finalSubtitle,
+      actionType: finalActionType,
+      slideCount: finalSlideCount,
+      template: finalTemplate,
+      fileName: String(fileName || `${finalTitle.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'briefbot-presentation'}.pptx`).slice(0, 180),
+      savedAt: createdAt,
+      createdAt,
+      updatedAt: createdAt
     };
 
-    const collectionRef = db.collection('pptHistory');
-    const docRef = await collectionRef.add(record);
+    const userPptRef = usersCollection.doc(cleanUserId).collection('savedPpts').doc();
+    await userPptRef.set(record);
 
-    return {
-      id: docRef.id,
-      ...record
-    };
+    await firestoreDb.collection('pptHistory').doc(userPptRef.id).set({
+      ...record,
+      pptId: userPptRef.id
+    }, { merge: true });
+
+    const userDoc = await usersCollection.doc(cleanUserId).get();
+    if (userDoc.exists) {
+      const currentCount = Number(userDoc.data()?.pptsGenerated || 0);
+      await usersCollection.doc(cleanUserId).set({ pptsGenerated: currentCount + 1, updatedAt: createdAt }, { merge: true });
+    }
+
+    return safePptItem({ id: userPptRef.id, data: () => record });
   } catch (error) {
     console.error('[PPT Firebase Save Skipped]', error.message);
     return null;
@@ -5386,6 +5451,9 @@ app.post('/api/ppt/export', async (req, res) => {
     if (userId && saveRecord) {
       await savePptRecordToFirebase({
         userId,
+        title: plan.title,
+        subtitle: plan.subtitle,
+        slideCount: plan.slides.length,
         pptPlan: plan,
         template,
         fileName: `${safeFileName}.pptx`,
@@ -5413,14 +5481,68 @@ app.get('/api/ppt/recent/:userId', async (req, res) => {
     const userDoc = await usersCollection.doc(cleanUserId).get();
     if (!userDoc.exists) return res.status(404).json({ error: 'User not found.' });
 
-    const snapshot = await usersCollection
-      .doc(cleanUserId)
-      .collection('savedPpts')
-      .orderBy('createdAt', 'desc')
-      .limit(12)
-      .get();
+    const byId = new Map();
+    const addPpt = (item) => {
+      const safe = safePptItem(item);
+      const key = safe.id || `${safe.title}-${safe.createdAt}`;
+      if (key && !byId.has(key)) byId.set(key, safe);
+    };
 
-    return res.json({ ok: true, ppts: snapshot.docs.map((doc) => safePptItem(doc)) });
+    try {
+      const snapshot = await usersCollection
+        .doc(cleanUserId)
+        .collection('savedPpts')
+        .orderBy('createdAt', 'desc')
+        .limit(20)
+        .get();
+      snapshot.docs.forEach(addPpt);
+    } catch (savedError) {
+      console.error('[Recent PPTs savedPpts Warning]', savedError.message);
+    }
+
+    try {
+      const historySnapshot = await firestoreDb
+        .collection('pptHistory')
+        .where('userId', '==', cleanUserId)
+        .limit(20)
+        .get();
+      historySnapshot.docs.forEach(addPpt);
+    } catch (historyError) {
+      console.error('[Recent PPTs pptHistory Warning]', historyError.message);
+    }
+
+    if (byId.size === 0) {
+      try {
+        const activitySnapshot = await activitiesCollection
+          .where('userId', '==', cleanUserId)
+          .where('type', 'in', ['ppt_exported', 'ppt_saved', 'ppt_plan_generated'])
+          .limit(30)
+          .get();
+
+        activitySnapshot.docs.forEach((doc) => {
+          const data = doc.data() || {};
+          addPpt({
+            id: doc.id,
+            userId: cleanUserId,
+            title: data.meta?.title || 'Brief Bot PPT',
+            subtitle: data.type === 'ppt_plan_generated' ? 'PPT plan generated' : '',
+            actionType: data.type === 'ppt_saved' ? 'saved' : data.type === 'ppt_exported' ? 'exported' : 'generated',
+            slideCount: Number(data.meta?.slideCount || 0),
+            template: data.meta?.template || 'template',
+            createdAt: data.createdAt || null,
+            updatedAt: data.createdAt || null
+          });
+        });
+      } catch (activityError) {
+        console.error('[Recent PPTs Activity Warning]', activityError.message);
+      }
+    }
+
+    const ppts = Array.from(byId.values())
+      .sort((a, b) => String(b.createdAt || b.savedAt || '').localeCompare(String(a.createdAt || a.savedAt || '')))
+      .slice(0, 12);
+
+    return res.json({ ok: true, ppts });
   } catch (error) {
     console.error('[Recent PPTs Error]', error);
     return res.status(500).json({ error: error.message });
