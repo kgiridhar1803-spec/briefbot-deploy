@@ -343,6 +343,70 @@ function App() {
         transform: translateY(0px) scale(0.98);
         box-shadow: 0 0 10px rgba(0, 242, 254, 0.22) !important;
       }
+
+      .battle-option-card,
+      .boss-option-card {
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        align-items: flex-start !important;
+        text-align: left !important;
+      }
+
+      .battle-option-card input,
+      .boss-option-card input {
+        flex: 0 0 auto !important;
+        width: 18px !important;
+        min-width: 18px !important;
+        height: 18px !important;
+        margin-top: 3px !important;
+      }
+
+      .battle-option-text,
+      .boss-option-text {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+        display: block !important;
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-break: break-word !important;
+        line-height: 1.55 !important;
+      }
+
+      @media screen and (max-width: 768px) {
+        .battle-option-card,
+        .boss-option-card {
+          padding: 0.95rem 0.9rem !important;
+          gap: 0.75rem !important;
+          border-radius: 14px !important;
+        }
+
+        .battle-question-card {
+          padding: 0.95rem !important;
+        }
+
+        .battle-question-scroll {
+          max-height: none !important;
+          padding: 0.9rem !important;
+          gap: 0.85rem !important;
+        }
+
+        .battle-leaderboard-row,
+        .boss-leaderboard-row {
+          grid-template-columns: 52px 1fr !important;
+          gap: 0.65rem !important;
+        }
+
+        .battle-leaderboard-row > div:nth-child(3),
+        .battle-leaderboard-row > div:nth-child(4),
+        .boss-leaderboard-row > div:nth-child(3),
+        .boss-leaderboard-row > div:nth-child(4) {
+          grid-column: 2 / -1 !important;
+          text-align: left !important;
+        }
+      }
     `;
 
     document.head.appendChild(style);
@@ -1387,9 +1451,12 @@ function App() {
       if (isBattleAssessment(data.assessment)) {
         await loadAssessmentLeaderboard(data.assessment.id);
       }
+
+      return data.assessment || null;
     } catch (error) {
       if (!silent) setAssessmentError(error.message);
       console.log('Room refresh skipped:', error.message);
+      return null;
     } finally {
       if (!silent) setAssessmentLoading(false);
     }
@@ -1685,8 +1752,11 @@ function App() {
       ? bossLeaderboard
       : (bossResult?.leaderboard || qualifiers || []);
     const hasBattleContext = Boolean(assessmentData && isBattleAssessment(assessmentData));
-    const leaderboardReady = getBattleLeaderboardList().length >= 2;
-    const currentUserQualified = isCurrentUserBossQualified();
+    const battlePlayers = getBattlePlayers();
+    const submittedBattlePlayers = getSubmittedBattlePlayers();
+    const battleAllSubmitted = areAllBattlePlayersSubmitted();
+    const leaderboardReady = battleAllSubmitted && getBossQualifiersClient().length >= 2;
+    const currentUserQualified = battleAllSubmitted && isCurrentUserBossQualified();
     const championUnlocked = isCurrentUserFinalBossChampion();
     const bossFinishedForUser = Boolean(bossResult);
     const waitingForOtherBossPlayers = bossFinishedForUser && !isBossBattleFullyCompleted();
@@ -1761,6 +1831,26 @@ function App() {
               <div style={{ fontSize: '2.5rem' }}>🔥</div>
               <h3 style={{ color: '#FFF7ED', margin: '0.55rem 0 0 0', fontWeight: '950' }}>Boss Mode unlocks after Battle Room</h3>
               <p style={{ color: '#FED7AA', maxWidth: '680px', margin: '0.55rem auto 0 auto', lineHeight: '1.65' }}>Create or join a Battle Room first. Once players complete the battle and the leaderboard is ready, the top performers can enter this fiery final round.</p>
+            </div>
+          ) : !battleAllSubmitted ? (
+            <div style={{ background: 'rgba(15,23,42,0.76)', border: '1px dashed rgba(251,146,60,0.34)', borderRadius: '20px', padding: '1.35rem', display: 'grid', gap: '1rem' }}>
+              <div>
+                <h3 style={{ color: '#FFF7ED', margin: 0, fontWeight: '950' }}>Boss Battle locked until everyone submits</h3>
+                <p style={{ color: '#FED7AA', margin: '0.45rem 0 0 0', lineHeight: '1.65' }}>
+                  Submitted {submittedBattlePlayers.length}/{battlePlayers.length}. The final Top 3 and Boss Arena will open only after all Battle Room players finish their test.
+                </p>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.85rem' }}>
+                {battlePlayers.map((player, index) => (
+                  <div key={player.userId || index} style={{ background: player.submitted ? 'rgba(52,211,153,0.10)' : 'rgba(255,255,255,0.04)', border: player.submitted ? '1px solid rgba(52,211,153,0.28)' : '1px solid rgba(255,255,255,0.08)', borderRadius: '16px', padding: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.7rem' }}>
+                    <div style={{ width: '42px', height: '42px', borderRadius: '14px', background: player.submitted ? 'linear-gradient(135deg, #34D399, #00F2FE)' : 'linear-gradient(135deg, #F97316, #EF4444)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '950', color: '#0B0F19' }}>{player.submitted ? '✅' : '⏳'}</div>
+                    <div>
+                      <div style={{ color: '#FFF7ED', fontWeight: '900' }}>{player.name || player.userName || 'Player'}</div>
+                      <div style={{ color: player.submitted ? '#86EFAC' : '#FECACA', fontSize: '0.82rem' }}>{player.submitted ? 'Submitted' : 'Still writing'}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : !leaderboardReady ? (
             <div style={{ background: 'rgba(15,23,42,0.76)', border: '1px dashed rgba(251,146,60,0.34)', borderRadius: '20px', padding: '1.35rem', display: 'grid', gap: '1rem' }}>
@@ -2017,9 +2107,9 @@ function App() {
                   <h4 style={{ color: '#FFF7ED', margin: '0 0 0.85rem 0', lineHeight: '1.55', fontSize: '1.08rem' }}>{question.question}</h4>
                   <div style={{ display: 'grid', gap: '0.7rem' }}>
                     {(question.options || []).map((option, optIndex) => (
-                      <label key={optIndex} style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', padding: '0.8rem', borderRadius: '14px', border: bossAnswers[question.id] === option ? '1px solid #F97316' : '1px solid rgba(255,255,255,0.10)', background: bossAnswers[question.id] === option ? 'linear-gradient(135deg, rgba(249,115,22,0.16), rgba(239,68,68,0.12))' : 'rgba(17,24,39,0.72)', color: '#FFF7ED', cursor: 'pointer' }}>
+                      <label key={optIndex} className="boss-option-card" style={{ display: 'flex', gap: '0.65rem', alignItems: 'flex-start', padding: '0.8rem', borderRadius: '14px', border: bossAnswers[question.id] === option ? '1px solid #F97316' : '1px solid rgba(255,255,255,0.10)', background: bossAnswers[question.id] === option ? 'linear-gradient(135deg, rgba(249,115,22,0.16), rgba(239,68,68,0.12))' : 'rgba(17,24,39,0.72)', color: '#FFF7ED', cursor: 'pointer', width: '100%', boxSizing: 'border-box' }}>
                         <input type="radio" checked={bossAnswers[question.id] === option} onChange={() => handleBossAnswerChange(question.id, option)} />
-                        <span style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '1.5' }}>{option}</span>
+                        <span className="boss-option-text" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '1.5' }}>{option}</span>
                       </label>
                     ))}
                   </div>
@@ -2176,20 +2266,71 @@ function App() {
   };
 
 
-  const getBattleLeaderboardList = () => {
-    return assessmentLeaderboard?.length
-      ? assessmentLeaderboard
-      : (assessmentData?.leaderboard || assessmentResult?.leaderboard || []);
+  const getBattleLeaderboardList = (assessment = assessmentData) => {
+    const freshAssessmentLeaderboard = Array.isArray(assessment?.leaderboard) ? assessment.leaderboard : [];
+    const liveLeaderboard = Array.isArray(assessmentLeaderboard) ? assessmentLeaderboard : [];
+    const resultLeaderboard = Array.isArray(assessmentResult?.leaderboard) ? assessmentResult.leaderboard : [];
+
+    return freshAssessmentLeaderboard.length
+      ? freshAssessmentLeaderboard
+      : liveLeaderboard.length
+        ? liveLeaderboard
+        : resultLeaderboard;
   };
 
-  const getBossQualifiersClient = () => {
-    const list = getBattleLeaderboardList();
-    if (!Array.isArray(list) || list.length < 2) return [];
-    return list.slice(0, Math.min(3, list.length));
+  const getSubmittedBattlePlayers = (assessment = assessmentData) => {
+    const leaderboardUserIds = new Set(getBattleLeaderboardList(assessment).map((player) => String(player.userId || player.id || '')).filter(Boolean));
+    return getBattlePlayers(assessment).filter((player) => {
+      const playerId = String(player.userId || player.id || '');
+      return Boolean(player.submitted) || leaderboardUserIds.has(playerId);
+    });
   };
 
-  const isCurrentUserBossQualified = () => {
-    return getBossQualifiersClient().some((player) => String(player.userId || player.id) === String(currentUser?.id));
+  const areAllBattlePlayersSubmitted = (assessment = assessmentData) => {
+    if (!assessment || !isBattleAssessment(assessment)) return false;
+    const players = getBattlePlayers(assessment);
+    if (players.length < 2) return false;
+
+    const leaderboardUserIds = getBattleLeaderboardList(assessment).map((player) => String(player.userId || player.id || '')).filter(Boolean);
+    const submittedUserIds = new Set(leaderboardUserIds);
+
+    return players.every((player) => {
+      const playerId = String(player.userId || player.id || '');
+      return Boolean(player.submitted) || submittedUserIds.has(playerId);
+    });
+  };
+
+  const getBossQualifiersClient = (assessment = assessmentData) => {
+    if (!areAllBattlePlayersSubmitted(assessment)) return [];
+
+    const list = getBattleLeaderboardList(assessment);
+    if (Array.isArray(list) && list.length >= 2) {
+      return list.slice(0, Math.min(3, list.length));
+    }
+
+    const submittedPlayers = getSubmittedBattlePlayers(assessment)
+      .sort((a, b) => {
+        const scoreDiff = Number(b.percentage || b.accuracy || 0) - Number(a.percentage || a.accuracy || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        return Number(a.timeTakenSeconds || 999999) - Number(b.timeTakenSeconds || 999999);
+      })
+      .map((player, index) => ({
+        ...player,
+        rank: player.rank || index + 1,
+        userName: player.userName || player.name || 'Player'
+      }));
+
+    return submittedPlayers.slice(0, Math.min(3, submittedPlayers.length));
+  };
+
+  const isCurrentUserBossQualified = (assessment = assessmentData) => {
+    return getBossQualifiersClient(assessment).some((player) => String(player.userId || player.id) === String(currentUser?.id));
+  };
+
+  const getBossGateMessage = (assessment = assessmentData) => {
+    const players = getBattlePlayers(assessment);
+    const submittedPlayers = getSubmittedBattlePlayers(assessment);
+    return `Boss Mode unlocks after all players submit. Submitted ${submittedPlayers.length}/${players.length}.`;
   };
 
   const handleBossAnswerChange = (questionId, value) => {
@@ -2207,7 +2348,17 @@ function App() {
       return;
     }
 
-    await refreshAssessmentRoom(assessmentData.id, false);
+    const latestAssessment = await refreshAssessmentRoom(assessmentData.id, false);
+    const gateAssessment = latestAssessment || assessmentData;
+
+    if (!areAllBattlePlayersSubmitted(gateAssessment)) {
+      setBossError(getBossGateMessage(gateAssessment));
+      return;
+    }
+
+    if (!isCurrentUserBossQualified(gateAssessment)) {
+      setBossError('Only the final Top 3 players can enter Boss Challenge.');
+    }
   };
 
   const handleStartBossBattle = async () => {
@@ -2225,7 +2376,16 @@ function App() {
     setBossAnswers({});
 
     try {
-      await refreshAssessmentRoom(assessmentData.id, true);
+      const latestAssessment = await refreshAssessmentRoom(assessmentData.id, true);
+      const gateAssessment = latestAssessment || assessmentData;
+
+      if (!areAllBattlePlayersSubmitted(gateAssessment)) {
+        throw new Error(getBossGateMessage(gateAssessment));
+      }
+
+      if (!isCurrentUserBossQualified(gateAssessment)) {
+        throw new Error('Only the final Top 3 players can enter Boss Challenge.');
+      }
 
       const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentData.id}/boss/start`, {
         method: 'POST',
@@ -6830,9 +6990,9 @@ function App() {
                   </div>
                 </div>
 
-                <div className="custom-scroll" style={{ maxHeight: '620px', overflowY: 'auto', padding: '1.4rem', display: 'grid', gap: '1rem' }}>
+                <div className="custom-scroll battle-question-scroll" style={{ maxHeight: '620px', overflowY: 'auto', padding: '1.4rem', display: 'grid', gap: '1rem' }}>
                   {(assessmentData.questions || []).map((question, index) => (
-                    <div key={question.id} style={{ backgroundColor: '#0B0F19', border: '1px solid #1F2937', borderRadius: '16px', padding: '1.1rem' }}>
+                    <div key={question.id} className="battle-question-card" style={{ backgroundColor: '#0B0F19', border: '1px solid #1F2937', borderRadius: '16px', padding: '1.1rem' }}>
                       <h4 style={{ margin: '0 0 0.9rem 0', color: '#FFF', lineHeight: '1.5' }}>{index + 1}. {question.question}</h4>
                       {question.type === 'sjt' && (
                         <div style={{ display: 'inline-flex', color: '#FBBF24', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: '999px', padding: '0.32rem 0.65rem', fontSize: '0.74rem', fontWeight: '950', marginBottom: '0.85rem' }}>
@@ -6842,9 +7002,9 @@ function App() {
                       {(question.type === 'mcq' || question.type === 'sjt') && (
                         <div style={{ display: 'grid', gap: '0.65rem' }}>
                           {(question.options || []).map((option, optIndex) => (
-                            <label key={optIndex} style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', padding: '0.75rem', borderRadius: '12px', border: assessmentAnswers[question.id] === option ? '1px solid #00F2FE' : '1px solid #1F2937', backgroundColor: assessmentAnswers[question.id] === option ? 'rgba(0,242,254,0.08)' : '#111827', color: '#D1D5DB', cursor: assessmentResult ? 'default' : 'pointer' }}>
+                            <label key={optIndex} className="battle-option-card" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.65rem', padding: '0.75rem', borderRadius: '12px', border: assessmentAnswers[question.id] === option ? '1px solid #00F2FE' : '1px solid #1F2937', backgroundColor: assessmentAnswers[question.id] === option ? 'rgba(0,242,254,0.08)' : '#111827', color: '#D1D5DB', cursor: assessmentResult ? 'default' : 'pointer', width: '100%', boxSizing: 'border-box' }}>
                               <input type="radio" disabled={Boolean(assessmentResult)} checked={assessmentAnswers[question.id] === option} onChange={() => handleAssessmentAnswerChange(question.id, option)} />
-                              <span style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '1.5' }}>{option}</span>
+                              <span className="battle-option-text" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '1.5' }}>{option}</span>
                             </label>
                           ))}
                         </div>
@@ -6993,14 +7153,26 @@ function App() {
                     
                     {isBattleAssessment() && (
                       <div style={{ marginTop: '1.2rem', background: 'linear-gradient(145deg, rgba(127,29,29,0.30), rgba(15,23,42,0.96))', border: '1px solid rgba(248,113,113,0.35)', borderRadius: '20px', padding: '1.1rem', display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <div>
+                        <div style={{ flex: '1 1 260px' }}>
                           <div style={{ color: '#FCA5A5', fontSize: '0.78rem', fontWeight: '950', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Final Round</div>
                           <h3 style={{ color: '#FFF', margin: '0.25rem 0 0 0', fontWeight: '950' }}>🔥 Brief Boss Challenge</h3>
-                          <p style={{ color: '#CBD5E1', margin: '0.4rem 0 0 0', lineHeight: '1.55' }}>Boss mode opens in its own fiery tab. Top battle performers can continue there and fight for the champion crown.</p>
+                          <p style={{ color: '#CBD5E1', margin: '0.4rem 0 0 0', lineHeight: '1.55' }}>
+                            {!areAllBattlePlayersSubmitted()
+                              ? getBossGateMessage()
+                              : isCurrentUserBossQualified()
+                                ? 'All players submitted. You are in the Top 3, so Boss Arena is unlocked.'
+                                : 'All players submitted. Boss Arena is available only for the final Top 3 players.'}
+                          </p>
                         </div>
-                        <button type="button" onClick={openBossChallengeTab} className="simple-btn-glow" style={{ background: 'linear-gradient(135deg, #EF4444, #F97316)', color: '#FFF7ED', border: 'none', borderRadius: '14px', padding: '0.9rem 1.2rem', cursor: 'pointer', fontWeight: '950' }}>
-                          Open Boss Mode →
-                        </button>
+                        {areAllBattlePlayersSubmitted() && isCurrentUserBossQualified() ? (
+                          <button type="button" onClick={openBossChallengeTab} className="simple-btn-glow" style={{ background: 'linear-gradient(135deg, #EF4444, #F97316)', color: '#FFF7ED', border: 'none', borderRadius: '14px', padding: '0.9rem 1.2rem', cursor: 'pointer', fontWeight: '950' }}>
+                            Open Boss Mode →
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => refreshAssessmentRoom(assessmentData?.id, false)} className="simple-btn-glow" style={{ background: 'rgba(15,23,42,0.80)', color: '#FDE68A', border: '1px solid rgba(251,191,36,0.30)', borderRadius: '14px', padding: '0.9rem 1.2rem', cursor: 'pointer', fontWeight: '950' }}>
+                            Refresh Status
+                          </button>
+                        )}
                       </div>
                     )}
 

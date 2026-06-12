@@ -2807,6 +2807,9 @@ function publicAssessment(assessmentDoc) {
     videoUrl: data.videoUrl || '',
     summary: data.summary || '',
     createdAt: data.createdAt || null,
+    completedAt: data.completedAt || null,
+    bossGateUnlocked: Boolean(data.bossGateUnlocked),
+    bossQualifiedUserIds: Array.isArray(data.bossQualifiedUserIds) ? data.bossQualifiedUserIds : [],
     bossBattle: data.bossBattle || null,
     questions: (data.questions || []).map((q, index) => {
       const type = q.type || data.questionType || 'mcq';
@@ -4058,6 +4061,94 @@ async function getBossLeaderboard(assessmentId, finalCompleted = false) {
     }));
 }
 
+
+function normalizeBattlePlayersMap(players = {}) {
+  if (Array.isArray(players)) {
+    return players.reduce((acc, player) => {
+      const id = String(player?.userId || player?.id || '').trim();
+      if (id) acc[id] = { ...player, userId: id };
+      return acc;
+    }, {});
+  }
+
+  return Object.keys(players || {}).reduce((acc, id) => {
+    const cleanId = String(id || '').trim();
+    if (cleanId) acc[cleanId] = { ...(players[id] || {}), userId: cleanId };
+    return acc;
+  }, {});
+}
+
+async function finalizeBattleCompletionIfReady(ref, assessmentId, assessmentData = {}) {
+  const players = normalizeBattlePlayersMap(assessmentData.players || {});
+  const leaderboard = await getLeaderboard(assessmentId);
+  const submittedIds = new Set((leaderboard || []).map((player) => String(player.userId || player.id || '')).filter(Boolean));
+
+  (leaderboard || []).forEach((player) => {
+    const id = String(player.userId || player.id || '').trim();
+    if (!id) return;
+    players[id] = {
+      ...(players[id] || {}),
+      userId: id,
+      name: player.userName || player.name || players[id]?.name || 'Player',
+      email: player.userEmail || players[id]?.email || '',
+      submitted: true,
+      score: Number(player.score || 0),
+      totalMarks: Number(player.totalMarks || 20),
+      percentage: Number(player.percentage || player.accuracy || 0),
+      accuracy: Number(player.accuracy || player.percentage || 0),
+      rank: player.rank,
+      remarks: player.remarks,
+      achievement: player.achievement,
+      submittedAt: player.submittedAt || players[id]?.submittedAt || nowISO(),
+      timeTakenSeconds: Number(player.timeTakenSeconds || players[id]?.timeTakenSeconds || 0),
+      isHost: Boolean(players[id]?.isHost),
+      role: players[id]?.role || (String(assessmentData.createdBy || '') === id ? 'host' : 'player')
+    };
+  });
+
+  const playerList = Object.values(players);
+  const allSubmitted = playerList.length >= 2 &&
+    playerList.every((player) => {
+      const id = String(player.userId || player.id || '').trim();
+      return Boolean(player.submitted) || submittedIds.has(id);
+    });
+
+  const baseUpdate = {
+    players,
+    leaderboard,
+    updatedAt: nowISO()
+  };
+
+  if (allSubmitted) {
+    const qualifiers = getBossQualifiersFromLeaderboard(leaderboard);
+    await ref.set({
+      ...baseUpdate,
+      status: 'completed',
+      completedAt: assessmentData.completedAt || nowISO(),
+      bossGateUnlocked: true,
+      bossQualifiedUserIds: qualifiers.map((player) => String(player.userId || player.id || '')).filter(Boolean)
+    }, { merge: true });
+
+    const updatedDoc = await ref.get();
+    return {
+      allSubmitted: true,
+      leaderboard,
+      players,
+      assessment: updatedDoc.data() || { ...assessmentData, ...baseUpdate, status: 'completed' }
+    };
+  }
+
+  await ref.set(baseUpdate, { merge: true });
+  const updatedDoc = await ref.get();
+  return {
+    allSubmitted: false,
+    leaderboard,
+    players,
+    assessment: updatedDoc.data() || { ...assessmentData, ...baseUpdate }
+  };
+}
+
+
 function scoreBossQuestions(questionList = [], cleanAnswers = {}) {
   let score = 0;
   const review = [];
@@ -4195,20 +4286,19 @@ app.post('/api/assessments/:assessmentId/submit', async (req, res) => {
             ...updatedPlayers[player.userId],
             rank: player.rank,
             remarks: player.remarks,
-            achievement: player.achievement
+            achievement: player.achievement,
+            submitted: true
           };
         }
       });
 
-      const playerList = Object.values(updatedPlayers || {});
-      const allSubmitted = playerList.length > 0 && playerList.every((player) => player.submitted);
       await ref.set({
         players: updatedPlayers,
         leaderboard,
-        status: allSubmitted ? 'completed' : (assessment.status || 'active'),
-        completedAt: allSubmitted ? nowISO() : (assessment.completedAt || null),
         updatedAt: nowISO()
       }, { merge: true });
+
+      await finalizeBattleCompletionIfReady(ref, assessmentId, { ...assessment, players: updatedPlayers, leaderboard });
     }
 
     const updatedDoc = await ref.get();
@@ -4237,19 +4327,23 @@ app.post('/api/assessments/:assessmentId/boss/start', async (req, res) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Assessment not found.' });
 
-    const assessment = doc.data() || {};
+    let assessment = doc.data() || {};
     if (assessment.assessmentMode !== 'battle') return res.status(400).json({ error: 'Boss Battle is available only for Battle Room.' });
 
-    const playersForBoss = Object.values(assessment.players || {});
-    const allBattlePlayersSubmitted = playersForBoss.length >= 2 && playersForBoss.every((player) => player.submitted);
-    if (assessment.status !== 'completed' && allBattlePlayersSubmitted) {
-      await ref.set({ status: 'completed', completedAt: assessment.completedAt || nowISO(), updatedAt: nowISO() }, { merge: true });
-      assessment.status = 'completed';
+    const finalization = await finalizeBattleCompletionIfReady(ref, assessmentId, assessment);
+    assessment = finalization.assessment || assessment;
+
+    const playersForBoss = Object.values(normalizeBattlePlayersMap(assessment.players || {}));
+    const allBattlePlayersSubmitted = Boolean(finalization.allSubmitted) ||
+      (playersForBoss.length >= 2 && playersForBoss.every((player) => player.submitted));
+
+    if (!allBattlePlayersSubmitted && assessment.status !== 'completed') {
+      return res.status(400).json({ error: 'Boss Battle unlocks after all players submit.' });
     }
 
-    if (assessment.status !== 'completed') return res.status(400).json({ error: 'Boss Battle unlocks after all players submit.' });
-
-    let leaderboard = await getLeaderboard(assessmentId);
+    let leaderboard = Array.isArray(finalization.leaderboard) && finalization.leaderboard.length
+      ? finalization.leaderboard
+      : await getLeaderboard(assessmentId);
     if (!leaderboard.length && Object.keys(assessment.players || {}).length) {
       leaderboard = Object.values(assessment.players || {})
         .filter((player) => player.submitted)
@@ -4406,22 +4500,12 @@ app.get('/api/assessments/:assessmentId/leaderboard', async (req, res) => {
     const doc = await docRef.get();
     if (!doc.exists) return res.status(404).json({ error: 'Assessment not found.' });
 
-    const leaderboard = await getLeaderboard(assessmentId);
+    let leaderboard = await getLeaderboard(assessmentId);
     const data = doc.data() || {};
 
     if (data.assessmentMode === 'battle') {
-      const players = { ...(data.players || {}) };
-      leaderboard.forEach((player) => {
-        if (players[player.userId]) {
-          players[player.userId] = {
-            ...players[player.userId],
-            rank: player.rank,
-            remarks: player.remarks,
-            achievement: player.achievement
-          };
-        }
-      });
-      await docRef.set({ leaderboard, players, updatedAt: nowISO() }, { merge: true });
+      const finalization = await finalizeBattleCompletionIfReady(docRef, assessmentId, data);
+      leaderboard = finalization.leaderboard || leaderboard;
     }
 
     return res.json({ ok: true, leaderboard });
