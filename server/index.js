@@ -1445,78 +1445,88 @@ async function summarizeWithTimestamps(transcript, language, summaryType) {
   const durationSeconds = estimateVideoDurationFromTranscript(transcript);
   const timeRange = getTranscriptTimeRange(transcript);
   const selectedTranscript = sampleTranscriptForFullCoverage(transcript, durationSeconds, summaryType);
-  const pointCount = (selectedTranscript.match(/^Point\s+\d+:/gm) || []).length || 5;
+  const timelinePoints = extractSelectedTimelinePoints(selectedTranscript);
   const isBullets = summaryType === 'bullets';
+  const pointCount = timelinePoints.length || (selectedTranscript.match(/^Point\s+\d+:/gm) || []).length || 5;
 
-  console.log(`[Summary] duration=${durationSeconds}s, range=${timeRange.start}-${timeRange.end}, points=${pointCount}, inputChars=${selectedTranscript.length}`);
-  console.log('[Summary] selected first:', selectedTranscript.split('\n').slice(0, 2).join(' | '));
-  console.log('[Summary] selected last:', selectedTranscript.split('\n').slice(-2).join(' | '));
+  console.log(`[Summary Safe Timeline] duration=${durationSeconds}s, range=${timeRange.start}-${timeRange.end}, points=${pointCount}, inputChars=${selectedTranscript.length}`);
 
-  const prompt = isBullets
-    ? `Output language: ${targetLanguage}
-
-Create an IMPORTANT POINTS summary for the WHOLE video.
-
-BULLETS MODE RULES:
-- Use the selected timeline points below from beginning, middle, and end.
-- Produce exactly ${pointCount} important timestamped bullets, one for each Point.
-- Every bullet must start with the exact timestamp from that Point using colon format like 0:00 or 10:30. Do not use numbering like 1., 2., 3.
-- Mention only useful/high-value information. Remove filler, greetings, repeated statements, and unimportant examples.
-- Do NOT copy transcript lines directly; rewrite in clean student-friendly meaning.
-- Keep every bullet short, complete, and easy to revise.
-- Every bullet must end as a complete sentence. Never end with and, for, where, with, to, of, because, including, or like.
-- Include the final/end timestamp near ${timeRange.end}.
-- Do not add headings.
-- End with [[END_SUMMARY]].
-
-Selected timeline points:
-${selectedTranscript}`
-    : `Output language: ${targetLanguage}
-
-Create a COMPLETE timestamped BRIEF SUMMARY using PARAGRAPH-STYLE POINTS ONLY for the WHOLE video.
-
-BRIEF MODE RULES:
-- Use the selected timeline points below from beginning, middle, and end.
-- Produce exactly ${Math.max(pointCount, 8)} timestamped paragraph-style summary points.
-- Every point must start with the exact timestamp from the selected timeline points using colon format like 0:00 or 10:30. Do not use numbering like 1., 2., 3.
-- Do NOT use bullet symbols, headings, numbering, tables, or labels like "Point 1".
-- Each timestamped point must be a small paragraph of 2 complete sentences.
-- Give MORE INFORMATION from the video: include important facts, names, examples, numbers, comparisons, causes, effects, steps, results, and conclusions when present.
-- Keep the language neat, simple, and student-friendly.
-- Do NOT copy transcript lines directly; rewrite the meaning clearly.
-- Remove filler, greetings, repeated lines, sponsor talk, and unnecessary conversation.
-- Use **bold** only for very important keywords.
-- Cover the complete video from ${timeRange.start} to ${timeRange.end}, including the final/end timestamp near ${timeRange.end}.
-- Every sentence must be complete. Do not stop in the middle.
-- Never end a point with and, for, where, with, to, of, because, including, or like.
-- End with [[END_SUMMARY]].
-
-Selected timeline points:
-${selectedTranscript}`;
-
-  const cleaned = await generateCompleteSummaryWithRetry(prompt, targetLanguage, isBullets, pointCount);
-
-  if (!cleaned || cleaned.length < 40) {
-    throw new Error('Summary generation returned empty output. Please try again.');
+  if (!timelinePoints.length) {
+    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
   }
 
-  const finalSummary = finalizeSummarySentences(cleaned);
-  if (!finalSummary || hasBrokenSummarySentences(finalSummary)) {
-    throw new Error('Summary validation failed because incomplete sentences were detected. Please try again.');
+  const pointInput = timelinePoints
+    .map((point, index) => `ID ${index + 1}: ${clipTranscriptToCompleteSentence(point.text, isBullets ? 260 : 360)}`)
+    .join('\n');
+
+  const prompt = `Output language: ${targetLanguage}
+
+You are creating summary text for a timestamped video summary.
+
+VERY IMPORTANT RULES:
+- Do NOT write timestamps.
+- Do NOT write numbering except the required ID label.
+- Do NOT invent times.
+- Return exactly ${timelinePoints.length} lines.
+- Each line must match this format exactly: ID 1: summary text
+- Keep the same ID order from ID 1 to ID ${timelinePoints.length}.
+- Write clean, student-friendly English.
+- Do not copy the transcript directly; explain the meaning clearly.
+- Every line must be a complete sentence.
+${isBullets ? '- Keep each line short and high-value.' : '- Each line can be 1 to 2 complete sentences with useful details.'}
+
+Transcript points to summarize:
+${pointInput}`;
+
+  let aiText = '';
+  try {
+    aiText = await generateText({
+      messages: [
+        { role: 'system', content: 'You summarize transcript points. You never create timestamps. You follow the exact ID line format.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.04,
+      maxTokens: isBullets ? 1100 : 1900
+    });
+  } catch (error) {
+    console.warn('[Summary Safe Timeline] AI text failed, using deterministic transcript timeline:', error.message);
+    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
   }
 
-  const timelineCheck = validateSummaryTimelineCoverage(finalSummary, durationSeconds);
-  if (!timelineCheck.ok) {
-    console.warn('[Summary Timeline Guard]', timelineCheck.reason);
+  const idSummaryMap = new Map();
+  const rawLines = String(aiText || '')
+    .replace(/\[\[END_SUMMARY\]\]/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
 
-    const repairedSummary = repairSummaryTimelineWithSelectedPoints(finalSummary, selectedTranscript, summaryType);
-    const repairedCheck = validateSummaryTimelineCoverage(repairedSummary, durationSeconds);
-    if (repairedSummary && repairedCheck.ok) {
-      console.warn('[Summary Timeline Guard] Repaired AI timestamps with original transcript timeline.');
-      return repairedSummary;
+  rawLines.forEach((line) => {
+    const match = line.match(/^ID\s*(\d+)\s*[:.)-]\s*(.+)$/i);
+    if (!match) return;
+
+    const id = Number(match[1]);
+    const cleaned = stripBadLeadingTimestampAndNumbering(match[2])
+      .replace(/^ID\s*\d+\s*[:.)-]\s*/i, '')
+      .trim();
+
+    if (id && cleaned.length > 10) {
+      idSummaryMap.set(id, clipTranscriptToCompleteSentence(cleaned, isBullets ? 210 : 360));
     }
+  });
 
-    console.warn('[Summary Timeline Guard] Using deterministic full-coverage transcript timeline fallback.');
+  const finalLines = timelinePoints.map((point, index) => {
+    const id = index + 1;
+    const aiSummary = idSummaryMap.get(id);
+    const fallbackSummary = clipTranscriptToCompleteSentence(point.text, isBullets ? 170 : 260);
+    const lineText = aiSummary || fallbackSummary;
+    return `⏱ ${point.timestamp} ${lineText}`;
+  });
+
+  const finalSummary = finalLines.join(isBullets ? '\n' : '\n\n');
+  const timelineCheck = validateSummaryTimelineCoverage(finalSummary, durationSeconds);
+
+  if (!timelineCheck.ok) {
+    console.warn('[Summary Safe Timeline] Final mapped summary failed validation:', timelineCheck.reason);
     return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
   }
 
