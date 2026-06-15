@@ -1873,15 +1873,16 @@ function App() {
           </button>
           <button
             type="button"
-            onClick={() => {
+            onClick={async () => {
               const modeToStart = assessmentInstructionMode === 'battle' ? 'battle' : 'solo';
+              await handleCreateAssessment(modeToStart);
               setAssessmentInstructionMode('');
-              handleCreateAssessment(modeToStart);
             }}
-            style={{ padding: '0.85rem 1.2rem', borderRadius: '14px', border: 'none', background: isBattle ? 'linear-gradient(135deg, #A855F7, #00F2FE)' : 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: isBattle ? '#FFFFFF' : '#070A13', cursor: 'pointer', fontWeight: '950' }}
+            disabled={assessmentLoading}
+            style={{ padding: '0.85rem 1.2rem', borderRadius: '14px', border: 'none', background: assessmentLoading ? '#374151' : (isBattle ? 'linear-gradient(135deg, #A855F7, #00F2FE)' : 'linear-gradient(135deg, #00F2FE, #4FACFE)'), color: isBattle ? '#FFFFFF' : '#070A13', cursor: assessmentLoading ? 'not-allowed' : 'pointer', fontWeight: '950', opacity: assessmentLoading ? 0.72 : 1 }}
             className="simple-btn-glow"
           >
-            I Understand, Continue
+            {assessmentLoading ? 'Generating 20 questions...' : 'I Understand, Continue'}
           </button>
         </div>
       </section>
