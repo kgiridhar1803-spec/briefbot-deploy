@@ -1275,6 +1275,80 @@ function validateSummaryTimelineCoverage(summaryText, durationSeconds = 0) {
   return { ok: true, reason: 'Timeline coverage is valid.' };
 }
 
+function extractSelectedTimelinePoints(selectedTranscript) {
+  const lines = String(selectedTranscript || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const points = [];
+  const seenSeconds = new Set();
+
+  for (const line of lines) {
+    const match = line.match(/^Point\s+\d+:\s*(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/i);
+    if (!match) continue;
+
+    const seconds = timestampToSeconds(match[1]);
+    if (seenSeconds.has(seconds)) continue;
+    seenSeconds.add(seconds);
+    points.push({ timestamp: match[1], seconds, text: cleanText(match[2]) });
+  }
+
+  return points.sort((a, b) => a.seconds - b.seconds);
+}
+
+function stripBadLeadingTimestampAndNumbering(line) {
+  return String(line || '')
+    .replace(/^\s*(?:[-*•]\s*)?\d+[.)]\s*/g, '')
+    .replace(/^\s*(?:⏱\s*)?\d{1,2}[.:]\d{1,2}(?:(?:[.:])\d{1,2})?\s*/g, '')
+    .replace(/^\s*(?:⏱\s*)?\d{1,2}:\d{2}(?::\d{2})?\s*/g, '')
+    .replace(/^\s*[-–—:]+\s*/g, '')
+    .trim();
+}
+
+function repairSummaryTimelineWithSelectedPoints(summaryText, selectedTranscript, summaryType = 'brief') {
+  const timelinePoints = extractSelectedTimelinePoints(selectedTranscript);
+  if (timelinePoints.length < 3) return '';
+
+  const rawLines = String(summaryText || '')
+    .split('\n')
+    .map((line) => stripBadLeadingTimestampAndNumbering(line))
+    .map((line) => line.replace(/\[\[END_SUMMARY\]\]/g, '').trim())
+    .filter((line) => line.length > 25);
+
+  if (rawLines.length < 3) return '';
+
+  const targetCount = Math.min(rawLines.length, timelinePoints.length);
+  const repairedLines = [];
+  const usedIndexes = new Set();
+
+  for (let index = 0; index < targetCount; index += 1) {
+    const ratio = targetCount === 1 ? 0 : index / (targetCount - 1);
+    let timelineIndex = Math.round((timelinePoints.length - 1) * ratio);
+
+    while (usedIndexes.has(timelineIndex) && timelineIndex < timelinePoints.length - 1) {
+      timelineIndex += 1;
+    }
+    while (usedIndexes.has(timelineIndex) && timelineIndex > 0) {
+      timelineIndex -= 1;
+    }
+
+    usedIndexes.add(timelineIndex);
+    const timestamp = timelinePoints[timelineIndex].timestamp;
+    const text = clipTranscriptToCompleteSentence(rawLines[index], summaryType === 'bullets' ? 190 : 320);
+    repairedLines.push(`⏱ ${timestamp} ${text}`);
+  }
+
+  const lastTimeline = timelinePoints[timelinePoints.length - 1];
+  const lastRepaired = repairedLines[repairedLines.length - 1] || '';
+  if (lastTimeline && !lastRepaired.startsWith(`⏱ ${lastTimeline.timestamp}`)) {
+    const lastContent = stripBadLeadingTimestampAndNumbering(repairedLines[repairedLines.length - 1] || timelinePoints[timelinePoints.length - 1].text);
+    repairedLines[repairedLines.length - 1] = `⏱ ${lastTimeline.timestamp} ${clipTranscriptToCompleteSentence(lastContent, summaryType === 'bullets' ? 190 : 320)}`;
+  }
+
+  return repairedLines.join(summaryType === 'bullets' ? '\n' : '\n\n');
+}
+
 function createDeterministicFullCoverageSummary(selectedTranscript, summaryType = 'brief') {
   const lines = String(selectedTranscript || '')
     .split('\n')
@@ -1434,6 +1508,15 @@ ${selectedTranscript}`;
   const timelineCheck = validateSummaryTimelineCoverage(finalSummary, durationSeconds);
   if (!timelineCheck.ok) {
     console.warn('[Summary Timeline Guard]', timelineCheck.reason);
+
+    const repairedSummary = repairSummaryTimelineWithSelectedPoints(finalSummary, selectedTranscript, summaryType);
+    const repairedCheck = validateSummaryTimelineCoverage(repairedSummary, durationSeconds);
+    if (repairedSummary && repairedCheck.ok) {
+      console.warn('[Summary Timeline Guard] Repaired AI timestamps with original transcript timeline.');
+      return repairedSummary;
+    }
+
+    console.warn('[Summary Timeline Guard] Using deterministic full-coverage transcript timeline fallback.');
     return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
   }
 
