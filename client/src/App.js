@@ -1782,12 +1782,6 @@ function App() {
     setAssessmentPanel(tab);
     setAssessmentError('');
     setBattleRoomError('');
-
-    if ((tab === 'solo' || tab === 'battle') && !assessmentData && analysisData) {
-      setAssessmentInstructionMode(tab);
-      return;
-    }
-
     setAssessmentInstructionMode('');
   };
 
@@ -1843,7 +1837,7 @@ function App() {
             </div>
             <h2 style={{ margin: 0, color: '#FFFFFF', fontSize: '1.9rem', fontWeight: '950' }}>{isBattle ? 'Battle Room Instructions' : 'Solo Test Instructions'}</h2>
             <p style={{ margin: '0.55rem 0 0 0', color: '#9CA3AF', lineHeight: '1.65', maxWidth: '760px' }}>
-              Please read these rules carefully before generating the questions. The test will start only after you continue.
+              Please read these rules carefully. Questions will be generated only after you click I Understand, Continue.
             </p>
           </div>
 
@@ -1879,7 +1873,11 @@ function App() {
           </button>
           <button
             type="button"
-            onClick={() => setAssessmentInstructionMode('')}
+            onClick={() => {
+              const modeToStart = assessmentInstructionMode === 'battle' ? 'battle' : 'solo';
+              setAssessmentInstructionMode('');
+              handleCreateAssessment(modeToStart);
+            }}
             style={{ padding: '0.85rem 1.2rem', borderRadius: '14px', border: 'none', background: isBattle ? 'linear-gradient(135deg, #A855F7, #00F2FE)' : 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: isBattle ? '#FFFFFF' : '#070A13', cursor: 'pointer', fontWeight: '950' }}
             className="simple-btn-glow"
           >
@@ -7049,8 +7047,8 @@ function App() {
                       <div style={{ padding: '0.9rem', borderRadius: '14px', background: '#111827', border: '1px solid #1F2937' }}><div style={{ color: '#9CA3AF', fontSize: '0.78rem', fontWeight: '800' }}>QUESTIONS</div><div style={{ color: '#00F2FE', fontSize: '1.5rem', fontWeight: '950' }}>20</div></div>
                       <div style={{ padding: '0.9rem', borderRadius: '14px', background: '#111827', border: '1px solid #1F2937' }}><div style={{ color: '#9CA3AF', fontSize: '0.78rem', fontWeight: '800' }}>TIMER</div><div style={{ color: '#34D399', fontSize: '1.5rem', fontWeight: '950' }}>20 min</div></div>
                     </div>
-                    <button type="button" onClick={() => handleCreateAssessment(assessmentPanel === 'battle' ? 'battle' : 'solo')} disabled={assessmentLoading || !analysisData} style={{ background: assessmentPanel === 'battle' ? 'linear-gradient(135deg, #A855F7, #00F2FE)' : 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: assessmentPanel === 'battle' ? '#FFF' : '#070A13', border: 'none', padding: '0.95rem 1rem', borderRadius: '12px', cursor: (assessmentLoading || !analysisData) ? 'not-allowed' : 'pointer', fontWeight: '950', opacity: (assessmentLoading || !analysisData) ? 0.65 : 1 }} className="simple-btn-glow">
-                      {assessmentLoading ? 'Generating 20 questions...' : assessmentPanel === 'battle' ? 'Create Battle Room' : 'Start Solo Practice'}
+                    <button type="button" onClick={() => setAssessmentInstructionMode(assessmentPanel === 'battle' ? 'battle' : 'solo')} disabled={assessmentLoading || !analysisData} style={{ background: assessmentPanel === 'battle' ? 'linear-gradient(135deg, #A855F7, #00F2FE)' : 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: assessmentPanel === 'battle' ? '#FFF' : '#070A13', border: 'none', padding: '0.95rem 1rem', borderRadius: '12px', cursor: (assessmentLoading || !analysisData) ? 'not-allowed' : 'pointer', fontWeight: '950', opacity: (assessmentLoading || !analysisData) ? 0.65 : 1 }} className="simple-btn-glow">
+                      {assessmentPanel === 'battle' ? 'Create Battle Room' : 'Start Solo Practice'}
                     </button>
                   </div>
                 )}
