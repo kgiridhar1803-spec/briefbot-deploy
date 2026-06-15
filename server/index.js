@@ -1246,6 +1246,75 @@ function hasEndSummaryMarker(text) {
   return String(text || '').includes('[[END_SUMMARY]]');
 }
 
+function extractStrictSummaryTimestamps(summaryText) {
+  const matches = [...String(summaryText || '').matchAll(/(?:^|\n)\s*(?:[-*]\s*)?(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\b/g)];
+  return matches.map((match) => ({ timestamp: match[1], seconds: timestampToSeconds(match[1]) }));
+}
+
+function validateSummaryTimelineCoverage(summaryText, durationSeconds = 0) {
+  const points = extractStrictSummaryTimestamps(summaryText);
+
+  if (points.length < 3) {
+    return { ok: false, reason: 'Too few valid timestamped points.' };
+  }
+
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index].seconds < points[index - 1].seconds) {
+      return { ok: false, reason: 'Timestamps are not in chronological order.' };
+    }
+  }
+
+  if (durationSeconds >= 6 * 60) {
+    const lastSecond = points[points.length - 1].seconds;
+    const requiredCoverage = Math.max(60, Math.floor(durationSeconds * 0.72));
+    if (lastSecond < requiredCoverage) {
+      return { ok: false, reason: `Summary stopped too early at ${secondsToTimestamp(lastSecond)} instead of covering near ${secondsToTimestamp(durationSeconds)}.` };
+    }
+  }
+
+  return { ok: true, reason: 'Timeline coverage is valid.' };
+}
+
+function createDeterministicFullCoverageSummary(selectedTranscript, summaryType = 'brief') {
+  const lines = String(selectedTranscript || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const points = [];
+  const seenSeconds = new Set();
+
+  for (const line of lines) {
+    const match = line.match(/^Point\s+\d+:\s*(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/i);
+    if (!match) continue;
+
+    const seconds = timestampToSeconds(match[1]);
+    if (seenSeconds.has(seconds)) continue;
+    seenSeconds.add(seconds);
+
+    const text = cleanText(match[2]);
+    const clipped = clipTranscriptToCompleteSentence(text, summaryType === 'bullets' ? 150 : 230);
+
+    points.push({ timestamp: match[1], seconds, text: clipped });
+  }
+
+  const ordered = points.sort((a, b) => a.seconds - b.seconds);
+
+  if (!ordered.length) {
+    return '⏱ 0:00 Summary could not be generated with valid timeline coverage. Please try again.';
+  }
+
+  if (summaryType === 'bullets') {
+    return ordered
+      .map((point) => `⏱ ${point.timestamp} ${point.text}`)
+      .join('\n');
+  }
+
+  return ordered
+    .map((point) => `⏱ ${point.timestamp} ${point.text} This point is included to keep the summary timeline in the correct video order.`)
+    .join('\n\n');
+}
+
 async function generateCompleteSummaryWithRetry(basePrompt, targetLanguage, isBullets, pointCount) {
   const systemMessage = isBullets
     ? 'You are a reliable video summarizer. Create only the most important timestamped points. Paraphrase clearly. Never copy transcript wording directly. Never stop mid-sentence.'
@@ -1317,7 +1386,7 @@ Create an IMPORTANT POINTS summary for the WHOLE video.
 BULLETS MODE RULES:
 - Use the selected timeline points below from beginning, middle, and end.
 - Produce exactly ${pointCount} important timestamped bullets, one for each Point.
-- Every bullet must start with the timestamp from that Point.
+- Every bullet must start with the exact timestamp from that Point using colon format like 0:00 or 10:30. Do not use numbering like 1., 2., 3.
 - Mention only useful/high-value information. Remove filler, greetings, repeated statements, and unimportant examples.
 - Do NOT copy transcript lines directly; rewrite in clean student-friendly meaning.
 - Keep every bullet short, complete, and easy to revise.
@@ -1335,7 +1404,7 @@ Create a COMPLETE timestamped BRIEF SUMMARY using PARAGRAPH-STYLE POINTS ONLY fo
 BRIEF MODE RULES:
 - Use the selected timeline points below from beginning, middle, and end.
 - Produce exactly ${Math.max(pointCount, 8)} timestamped paragraph-style summary points.
-- Every point must start with a timestamp from the selected timeline points.
+- Every point must start with the exact timestamp from the selected timeline points using colon format like 0:00 or 10:30. Do not use numbering like 1., 2., 3.
 - Do NOT use bullet symbols, headings, numbering, tables, or labels like "Point 1".
 - Each timestamped point must be a small paragraph of 2 complete sentences.
 - Give MORE INFORMATION from the video: include important facts, names, examples, numbers, comparisons, causes, effects, steps, results, and conclusions when present.
@@ -1360,6 +1429,12 @@ ${selectedTranscript}`;
   const finalSummary = finalizeSummarySentences(cleaned);
   if (!finalSummary || hasBrokenSummarySentences(finalSummary)) {
     throw new Error('Summary validation failed because incomplete sentences were detected. Please try again.');
+  }
+
+  const timelineCheck = validateSummaryTimelineCoverage(finalSummary, durationSeconds);
+  if (!timelineCheck.ok) {
+    console.warn('[Summary Timeline Guard]', timelineCheck.reason);
+    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
   }
 
   return finalSummary;

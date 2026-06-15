@@ -125,6 +125,7 @@ function App() {
   const FIXED_ASSESSMENT_QUESTION_COUNT = 20;
   const FIXED_ASSESSMENT_TIMER_SECONDS = 20 * 60;
   const [assessmentPanel, setAssessmentPanel] = useState('solo');
+  const [assessmentInstructionMode, setAssessmentInstructionMode] = useState('');
   const [battleJoinCode, setBattleJoinCode] = useState('');
   const [battleLoading, setBattleLoading] = useState(false);
   const [compareVideo1, setCompareVideo1] = useState('');
@@ -1776,6 +1777,117 @@ function App() {
     return list.find((player) => String(player.userId || '') === String(currentUser?.id || '')) || bossResult || null;
   };
 
+
+  const handleAssessmentPanelSelect = (tab) => {
+    setAssessmentPanel(tab);
+    setAssessmentError('');
+    setBattleRoomError('');
+    setAssessmentInstructionMode('');
+  };
+
+  const getAssessmentInstructionPoints = (mode) => {
+    if (mode === 'battle') {
+      return [
+        'Battle Room is a group test between joined players.',
+        'The test contains 20 questions.',
+        'The total time limit is 20 minutes.',
+        'The host starts the battle after players join the room.',
+        'Once the battle starts, all players must complete the same test.',
+        'You can skip questions if you are not sure about the answer.',
+        'Unanswered questions will be counted as not attempted.',
+        'Do not refresh, close, or go back during the battle.',
+        'If time ends, your answers will be submitted automatically.',
+        'After submitting, wait until all players finish the battle.',
+        'The leaderboard will be finalized only after all players submit.',
+        'If two players get the same score, faster submission time gets better rank.',
+        'Only the final Top 3 players qualify for Boss Arena.',
+        'Players who are not in the Top 3 will see “Better Luck Next Time.”',
+        'Boss Arena unlocks only after every Battle Room player submits.',
+        'Your Battle result will be saved in your Profile Test History.'
+      ];
+    }
+
+    return [
+      'The test contains 20 questions.',
+      'The total time limit is 20 minutes.',
+      'The timer starts immediately after you click Start Test.',
+      'You can skip questions if you are not sure about the answer.',
+      'Unanswered questions will be counted as not attempted.',
+      'Select the correct option or type your answer based on the question type.',
+      'You can move between questions while the timer is running.',
+      'Do not refresh, close, or go back during the test.',
+      'If time ends, your test will be submitted automatically.',
+      'After submission, your score, percentage, remarks, and achievement will be shown.',
+      'Your result will be saved in your Profile Test History.'
+    ];
+  };
+
+  const renderAssessmentInstructionPage = () => {
+    if (!assessmentInstructionMode) return null;
+
+    const isBattle = assessmentInstructionMode === 'battle';
+    const points = getAssessmentInstructionPoints(assessmentInstructionMode);
+
+    return (
+      <section style={{ background: isBattle ? 'linear-gradient(145deg, rgba(168,85,247,0.18), #0B1120)' : 'linear-gradient(145deg, rgba(0,242,254,0.14), #0B1120)', border: isBattle ? '1px solid rgba(168,85,247,0.35)' : '1px solid rgba(0,242,254,0.32)', borderRadius: '26px', padding: '1.6rem', marginBottom: '1.5rem', boxShadow: '0 24px 70px rgba(0,0,0,0.35)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.2rem' }}>
+          <div>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', padding: '0.45rem 0.75rem', borderRadius: '999px', background: isBattle ? 'rgba(168,85,247,0.16)' : 'rgba(0,242,254,0.12)', color: isBattle ? '#C084FC' : '#00F2FE', border: isBattle ? '1px solid rgba(168,85,247,0.32)' : '1px solid rgba(0,242,254,0.28)', fontWeight: '950', fontSize: '0.82rem', marginBottom: '0.8rem' }}>
+              {isBattle ? '⚔️ Battle Room' : '👤 Solo Practice'} • Read Before Starting
+            </div>
+            <h2 style={{ margin: 0, color: '#FFFFFF', fontSize: '1.9rem', fontWeight: '950' }}>{isBattle ? 'Battle Room Instructions' : 'Solo Test Instructions'}</h2>
+            <p style={{ margin: '0.55rem 0 0 0', color: '#9CA3AF', lineHeight: '1.65', maxWidth: '760px' }}>
+              Please read these rules carefully. Questions will be generated only after you click I Understand, Continue.
+            </p>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(90px, 1fr))', gap: '0.65rem', minWidth: '220px' }}>
+            <div style={{ padding: '0.8rem', borderRadius: '16px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', textAlign: 'center' }}>
+              <div style={{ color: '#FFFFFF', fontSize: '1.35rem', fontWeight: '950' }}>20</div>
+              <div style={{ color: '#9CA3AF', fontSize: '0.78rem', fontWeight: '800' }}>Questions</div>
+            </div>
+            <div style={{ padding: '0.8rem', borderRadius: '16px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', textAlign: 'center' }}>
+              <div style={{ color: '#FFFFFF', fontSize: '1.35rem', fontWeight: '950' }}>20m</div>
+              <div style={{ color: '#9CA3AF', fontSize: '0.78rem', fontWeight: '800' }}>Timer</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gap: '0.65rem', marginBottom: '1.3rem' }}>
+          {points.map((point, index) => (
+            <div key={index} style={{ display: 'grid', gridTemplateColumns: '34px 1fr', gap: '0.75rem', alignItems: 'flex-start', padding: '0.75rem 0.85rem', borderRadius: '15px', background: 'rgba(15,23,42,0.72)', border: '1px solid rgba(255,255,255,0.08)' }}>
+              <span style={{ width: '34px', height: '34px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: isBattle ? 'rgba(168,85,247,0.16)' : 'rgba(0,242,254,0.13)', color: isBattle ? '#C084FC' : '#00F2FE', fontWeight: '950', border: isBattle ? '1px solid rgba(168,85,247,0.30)' : '1px solid rgba(0,242,254,0.26)' }}>{index + 1}</span>
+              <span style={{ color: '#E5E7EB', lineHeight: '1.6', fontWeight: '650' }}>{point}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.85rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => setAssessmentInstructionMode('')}
+            style={{ padding: '0.85rem 1.15rem', borderRadius: '14px', border: '1px solid #374151', background: '#111827', color: '#D1D5DB', cursor: 'pointer', fontWeight: '950' }}
+            className="simple-btn-glow"
+          >
+            ← Back
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              const modeToStart = assessmentInstructionMode === 'battle' ? 'battle' : 'solo';
+              await handleCreateAssessment(modeToStart);
+              setAssessmentInstructionMode('');
+            }}
+            disabled={assessmentLoading}
+            style={{ padding: '0.85rem 1.2rem', borderRadius: '14px', border: 'none', background: assessmentLoading ? '#374151' : (isBattle ? 'linear-gradient(135deg, #A855F7, #00F2FE)' : 'linear-gradient(135deg, #00F2FE, #4FACFE)'), color: isBattle ? '#FFFFFF' : '#070A13', cursor: assessmentLoading ? 'not-allowed' : 'pointer', fontWeight: '950', opacity: assessmentLoading ? 0.72 : 1 }}
+            className="simple-btn-glow"
+          >
+            {assessmentLoading ? 'Generating 20 questions...' : 'I Understand, Continue'}
+          </button>
+        </div>
+      </section>
+    );
+  };
 
   const renderBossChallengeArena = () => {
     const qualifiers = getBossQualifiersClient();
@@ -6796,7 +6908,7 @@ function App() {
                 <button
                   key={tab}
                   type="button"
-                  onClick={() => setAssessmentPanel(tab)}
+                  onClick={() => handleAssessmentPanelSelect(tab)}
                   style={{
                     padding: '0.7rem 1rem',
                     borderRadius: '999px',
@@ -6827,7 +6939,9 @@ function App() {
             </div>
           )}
 
-          {!isAssessmentAttemptActive() && !assessmentData && (analysisData || assessmentPanel === 'join') && (
+          {!isAssessmentAttemptActive() && !assessmentData && assessmentInstructionMode && analysisData && renderAssessmentInstructionPage()}
+
+          {!isAssessmentAttemptActive() && !assessmentData && !assessmentInstructionMode && (analysisData || assessmentPanel === 'join') && (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 420px) 1fr', gap: '1.5rem', alignItems: 'start' }} className="assessment-layout">
               <aside style={{ background: 'linear-gradient(145deg, #0F1626, #0B1120)', border: '1px solid #1F2937', borderRadius: '20px', padding: '1.4rem', boxShadow: '0 18px 45px rgba(0,0,0,0.35)' }}>
                 <h3 style={{ margin: 0, color: '#FFF', fontSize: '1.2rem', fontWeight: '900' }}>{assessmentPanel === 'battle' ? 'Create Battle Room' : assessmentPanel === 'join' ? 'Join Battle Room' : 'Create Solo Practice'}</h3>
@@ -6934,8 +7048,8 @@ function App() {
                       <div style={{ padding: '0.9rem', borderRadius: '14px', background: '#111827', border: '1px solid #1F2937' }}><div style={{ color: '#9CA3AF', fontSize: '0.78rem', fontWeight: '800' }}>QUESTIONS</div><div style={{ color: '#00F2FE', fontSize: '1.5rem', fontWeight: '950' }}>20</div></div>
                       <div style={{ padding: '0.9rem', borderRadius: '14px', background: '#111827', border: '1px solid #1F2937' }}><div style={{ color: '#9CA3AF', fontSize: '0.78rem', fontWeight: '800' }}>TIMER</div><div style={{ color: '#34D399', fontSize: '1.5rem', fontWeight: '950' }}>20 min</div></div>
                     </div>
-                    <button type="button" onClick={() => handleCreateAssessment(assessmentPanel === 'battle' ? 'battle' : 'solo')} disabled={assessmentLoading || !analysisData} style={{ background: assessmentPanel === 'battle' ? 'linear-gradient(135deg, #A855F7, #00F2FE)' : 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: assessmentPanel === 'battle' ? '#FFF' : '#070A13', border: 'none', padding: '0.95rem 1rem', borderRadius: '12px', cursor: (assessmentLoading || !analysisData) ? 'not-allowed' : 'pointer', fontWeight: '950', opacity: (assessmentLoading || !analysisData) ? 0.65 : 1 }} className="simple-btn-glow">
-                      {assessmentLoading ? 'Generating 20 questions...' : assessmentPanel === 'battle' ? 'Create Battle Room' : 'Start Solo Practice'}
+                    <button type="button" onClick={() => setAssessmentInstructionMode(assessmentPanel === 'battle' ? 'battle' : 'solo')} disabled={assessmentLoading || !analysisData} style={{ background: assessmentPanel === 'battle' ? 'linear-gradient(135deg, #A855F7, #00F2FE)' : 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: assessmentPanel === 'battle' ? '#FFF' : '#070A13', border: 'none', padding: '0.95rem 1rem', borderRadius: '12px', cursor: (assessmentLoading || !analysisData) ? 'not-allowed' : 'pointer', fontWeight: '950', opacity: (assessmentLoading || !analysisData) ? 0.65 : 1 }} className="simple-btn-glow">
+                      {assessmentPanel === 'battle' ? 'Create Battle Room' : 'Start Solo Practice'}
                     </button>
                   </div>
                 )}
