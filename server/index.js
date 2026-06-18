@@ -389,8 +389,8 @@ function getModelList() {
 const MIN_TRANSCRIPT_WORDS = 60;
 const MAX_TRANSCRIPT_CHARS = 30000;
 const SUMMARY_INPUT_CHARS = 7000; // Safe input budget for Cerebras summary calls
-const TIMELINE_SAMPLE_CHARS = 9500; // More transcript coverage for richer brief paragraphs
-const SUMMARY_MAX_TOKENS = 2600;
+const TIMELINE_SAMPLE_CHARS = 14000; // More transcript coverage for reliable full-video summary points
+const SUMMARY_MAX_TOKENS = 3200;
 const CHAT_MAX_TOKENS = 250;
 const QUESTION_MAX_TOKENS = 350;
 const ANSWER_MAX_TOKENS = 300;
@@ -469,7 +469,7 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'brief-bot-admin-dashboard-users-only-2026-06-01-v9',
+    version: 'brief-bot-stable-summary-v3-2026-06-18',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
@@ -1175,21 +1175,21 @@ function compactTranscriptLine(line, maxTextChars) {
 function getTimelinePointCount(durationSeconds, lineCount, summaryType = 'brief') {
   if (lineCount <= 4) return lineCount;
 
-  // Bullets mode = only important points, so keep fewer/high-value points.
+  // More points = better full-video coverage for PPT and assessment quality.
+  // Keep it controlled so free-tier APIs do not fail.
   if (summaryType === 'bullets') {
-    if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(5, lineCount);
-    if (durationSeconds <= 12 * 60) return Math.min(7, lineCount);
-    if (durationSeconds <= 25 * 60) return Math.min(9, lineCount);
-    if (durationSeconds <= 45 * 60) return Math.min(10, lineCount);
-    return Math.min(11, lineCount);
+    if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(6, lineCount);
+    if (durationSeconds <= 12 * 60) return Math.min(9, lineCount);
+    if (durationSeconds <= 25 * 60) return Math.min(12, lineCount);
+    if (durationSeconds <= 45 * 60) return Math.min(14, lineCount);
+    return Math.min(16, lineCount);
   }
 
-  // Brief mode = main summary, so give more complete coverage from start to end.
-  if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(7, lineCount);
-  if (durationSeconds <= 12 * 60) return Math.min(10, lineCount);
-  if (durationSeconds <= 25 * 60) return Math.min(13, lineCount);
-  if (durationSeconds <= 45 * 60) return Math.min(15, lineCount);
-  return Math.min(16, lineCount);
+  if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(9, lineCount);
+  if (durationSeconds <= 12 * 60) return Math.min(14, lineCount);
+  if (durationSeconds <= 25 * 60) return Math.min(18, lineCount);
+  if (durationSeconds <= 45 * 60) return Math.min(22, lineCount);
+  return Math.min(24, lineCount);
 }
 
 function sampleTranscriptForFullCoverage(transcript, durationSeconds, summaryType = 'brief') {
@@ -1244,6 +1244,112 @@ function getTranscriptTimeRange(transcript) {
 
 function hasEndSummaryMarker(text) {
   return String(text || '').includes('[[END_SUMMARY]]');
+}
+
+function extractSelectedTimelinePoints(selectedTranscript) {
+  const lines = String(selectedTranscript || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const points = [];
+  const seenSeconds = new Set();
+
+  for (const line of lines) {
+    const match = line.match(/^Point\s+\d+:\s*(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/i);
+    if (!match) continue;
+
+    const seconds = timestampToSeconds(match[1]);
+    if (seenSeconds.has(seconds)) continue;
+    seenSeconds.add(seconds);
+
+    points.push({
+      timestamp: match[1],
+      seconds,
+      text: cleanText(match[2])
+    });
+  }
+
+  return points.sort((a, b) => a.seconds - b.seconds);
+}
+
+function stripBadLeadingTimestampAndNumbering(line) {
+  return String(line || '')
+    .replace(/^\s*(?:[-*•]\s*)?\d+[.)]\s*/g, '')
+    .replace(/^\s*(?:⏱\s*)?\d{1,2}[.:]\d{1,2}(?:(?:[.:])\d{1,2})?\s*/g, '')
+    .replace(/^\s*(?:⏱\s*)?\d{1,2}:\d{2}(?::\d{2})?\s*/g, '')
+    .replace(/^\s*ID\s*\d+\s*[:.)-]\s*/i, '')
+    .replace(/^\s*[-–—:]+\s*/g, '')
+    .trim();
+}
+
+function extractStrictSummaryTimestamps(summaryText) {
+  const matches = [...String(summaryText || '').matchAll(/(?:^|\n)\s*(?:[-*]\s*)?(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\b/g)];
+  return matches.map((match) => ({ timestamp: match[1], seconds: timestampToSeconds(match[1]) }));
+}
+
+function validateSummaryTimelineCoverage(summaryText, durationSeconds = 0) {
+  const points = extractStrictSummaryTimestamps(summaryText);
+
+  if (points.length < 3) {
+    return { ok: false, reason: 'Too few valid timestamped points.' };
+  }
+
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index].seconds < points[index - 1].seconds) {
+      return { ok: false, reason: 'Timestamps are not in chronological order.' };
+    }
+  }
+
+  if (durationSeconds >= 6 * 60) {
+    const lastSecond = points[points.length - 1].seconds;
+    const requiredCoverage = Math.max(60, Math.floor(durationSeconds * 0.72));
+    if (lastSecond < requiredCoverage) {
+      return { ok: false, reason: `Summary stopped too early at ${secondsToTimestamp(lastSecond)} instead of covering near ${secondsToTimestamp(durationSeconds)}.` };
+    }
+  }
+
+  return { ok: true, reason: 'Timeline coverage is valid.' };
+}
+
+function createDeterministicFullCoverageSummary(selectedTranscript, summaryType = 'brief') {
+  const points = extractSelectedTimelinePoints(selectedTranscript);
+
+  if (!points.length) {
+    return '⏱ 0:00 Summary could not be generated with valid timeline coverage. Please try again.';
+  }
+
+  if (summaryType === 'bullets') {
+    return points
+      .map((point) => `⏱ ${point.timestamp} ${clipTranscriptToCompleteSentence(point.text, 170)}`)
+      .join('\n');
+  }
+
+  return points
+    .map((point) => `⏱ ${point.timestamp} ${clipTranscriptToCompleteSentence(point.text, 260)} This part is included in correct video order to preserve full timeline coverage.`)
+    .join('\n\n');
+}
+
+function parseAiIdSummaries(aiText) {
+  const idSummaryMap = new Map();
+  const lines = String(aiText || '')
+    .replace(/\[\[END_SUMMARY\]\]/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  lines.forEach((line) => {
+    const match = line.match(/^ID\s*(\d+)\s*[:.)-]\s*(.+)$/i);
+    if (!match) return;
+
+    const id = Number(match[1]);
+    const cleaned = stripBadLeadingTimestampAndNumbering(match[2]);
+    if (id && cleaned.length > 10) {
+      idSummaryMap.set(id, cleaned);
+    }
+  });
+
+  return idSummaryMap;
 }
 
 async function generateCompleteSummaryWithRetry(basePrompt, targetLanguage, isBullets, pointCount) {
@@ -1302,64 +1408,75 @@ async function summarizeWithTimestamps(transcript, language, summaryType) {
   const durationSeconds = estimateVideoDurationFromTranscript(transcript);
   const timeRange = getTranscriptTimeRange(transcript);
   const selectedTranscript = sampleTranscriptForFullCoverage(transcript, durationSeconds, summaryType);
-  const pointCount = (selectedTranscript.match(/^Point\s+\d+:/gm) || []).length || 5;
+  const timelinePoints = extractSelectedTimelinePoints(selectedTranscript);
   const isBullets = summaryType === 'bullets';
 
-  console.log(`[Summary] duration=${durationSeconds}s, range=${timeRange.start}-${timeRange.end}, points=${pointCount}, inputChars=${selectedTranscript.length}`);
-  console.log('[Summary] selected first:', selectedTranscript.split('\n').slice(0, 2).join(' | '));
-  console.log('[Summary] selected last:', selectedTranscript.split('\n').slice(-2).join(' | '));
+  console.log(`[Summary Stable V3] duration=${durationSeconds}s, range=${timeRange.start}-${timeRange.end}, timelinePoints=${timelinePoints.length}, inputChars=${selectedTranscript.length}`);
 
-  const prompt = isBullets
-    ? `Output language: ${targetLanguage}
-
-Create an IMPORTANT POINTS summary for the WHOLE video.
-
-BULLETS MODE RULES:
-- Use the selected timeline points below from beginning, middle, and end.
-- Produce exactly ${pointCount} important timestamped bullets, one for each Point.
-- Every bullet must start with the timestamp from that Point.
-- Mention only useful/high-value information. Remove filler, greetings, repeated statements, and unimportant examples.
-- Do NOT copy transcript lines directly; rewrite in clean student-friendly meaning.
-- Keep every bullet short, complete, and easy to revise.
-- Every bullet must end as a complete sentence. Never end with and, for, where, with, to, of, because, including, or like.
-- Include the final/end timestamp near ${timeRange.end}.
-- Do not add headings.
-- End with [[END_SUMMARY]].
-
-Selected timeline points:
-${selectedTranscript}`
-    : `Output language: ${targetLanguage}
-
-Create a COMPLETE timestamped BRIEF SUMMARY using PARAGRAPH-STYLE POINTS ONLY for the WHOLE video.
-
-BRIEF MODE RULES:
-- Use the selected timeline points below from beginning, middle, and end.
-- Produce exactly ${Math.max(pointCount, 8)} timestamped paragraph-style summary points.
-- Every point must start with a timestamp from the selected timeline points.
-- Do NOT use bullet symbols, headings, numbering, tables, or labels like "Point 1".
-- Each timestamped point must be a small paragraph of 2 complete sentences.
-- Give MORE INFORMATION from the video: include important facts, names, examples, numbers, comparisons, causes, effects, steps, results, and conclusions when present.
-- Keep the language neat, simple, and student-friendly.
-- Do NOT copy transcript lines directly; rewrite the meaning clearly.
-- Remove filler, greetings, repeated lines, sponsor talk, and unnecessary conversation.
-- Use **bold** only for very important keywords.
-- Cover the complete video from ${timeRange.start} to ${timeRange.end}, including the final/end timestamp near ${timeRange.end}.
-- Every sentence must be complete. Do not stop in the middle.
-- Never end a point with and, for, where, with, to, of, because, including, or like.
-- End with [[END_SUMMARY]].
-
-Selected timeline points:
-${selectedTranscript}`;
-
-  const cleaned = await generateCompleteSummaryWithRetry(prompt, targetLanguage, isBullets, pointCount);
-
-  if (!cleaned || cleaned.length < 40) {
-    throw new Error('Summary generation returned empty output. Please try again.');
+  if (!timelinePoints.length) {
+    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
   }
 
-  const finalSummary = finalizeSummarySentences(cleaned);
-  if (!finalSummary || hasBrokenSummarySentences(finalSummary)) {
-    throw new Error('Summary validation failed because incomplete sentences were detected. Please try again.');
+  const pointInput = timelinePoints
+    .map((point, index) => `ID ${index + 1}: ${clipTranscriptToCompleteSentence(point.text, isBullets ? 260 : 380)}`)
+    .join('\n');
+
+  const prompt = `Output language: ${targetLanguage}
+
+You are creating the text part of a full-video summary for a learning website.
+The backend will add the timestamps later, so you must NOT write timestamps.
+
+STRICT OUTPUT RULES:
+- Return exactly ${timelinePoints.length} lines.
+- Use this exact format only: ID 1: summary text
+- Keep ID order from 1 to ${timelinePoints.length}.
+- Do NOT write timestamps.
+- Do NOT write bullet symbols, headings, tables, or numbering other than the ID label.
+- Do NOT stop in the middle of a sentence.
+- Do NOT copy transcript wording directly; explain the meaning clearly.
+- Write clear student-friendly English.
+${isBullets
+  ? '- Each ID line should be one short but useful sentence.'
+  : '- Each ID line should be 1 to 2 complete sentences with useful details for PPT and assessment generation.'}
+
+Transcript timeline points from full video:
+${pointInput}`;
+
+  let aiText = '';
+
+  try {
+    aiText = await generateText({
+      messages: [
+        {
+          role: 'system',
+          content: 'You summarize transcript points for a learning platform. You never create timestamps. You strictly return ID lines only.'
+        },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.04,
+      maxTokens: isBullets ? 1200 : 2400
+    });
+  } catch (error) {
+    console.warn('[Summary Stable V3] AI failed; using deterministic transcript timeline fallback:', error.message);
+    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
+  }
+
+  const idSummaryMap = parseAiIdSummaries(aiText);
+
+  const finalLines = timelinePoints.map((point, index) => {
+    const id = index + 1;
+    const aiSummary = idSummaryMap.get(id);
+    const fallbackSummary = clipTranscriptToCompleteSentence(point.text, isBullets ? 170 : 260);
+    const cleanSummary = clipTranscriptToCompleteSentence(stripBadLeadingTimestampAndNumbering(aiSummary || fallbackSummary), isBullets ? 220 : 380);
+    return `⏱ ${point.timestamp} ${cleanSummary}`;
+  });
+
+  const finalSummary = finalLines.join(isBullets ? '\n' : '\n\n');
+  const timelineCheck = validateSummaryTimelineCoverage(finalSummary, durationSeconds);
+
+  if (!timelineCheck.ok) {
+    console.warn('[Summary Stable V3] Timeline validation failed:', timelineCheck.reason);
+    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
   }
 
   return finalSummary;
