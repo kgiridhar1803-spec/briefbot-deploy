@@ -8,11 +8,8 @@ import * as cheerio from 'cheerio';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import os from 'os';
 import admin from 'firebase-admin';
 import pptxgen from 'pptxgenjs';
-import youtubedl from 'youtube-dl-exec';
-import ffmpegPath from 'ffmpeg-static';
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -192,24 +189,6 @@ async function saveSummaryHistoryToFirebase({ userId, url, summary, language, su
   await addActivity({ userId: cleanUserId, type: 'summary_history_saved', meta: { url: cleanUrl, summaryType: payload.summaryType, language: payload.language } });
   const savedDoc = await docRef.get();
   return safeHistoryItem(savedDoc);
-}
-
-
-function safePptItem(doc) {
-  const data = doc?.data ? doc.data() : (doc || {});
-  return {
-    id: doc?.id || data.id || `ppt-${Date.now()}`,
-    userId: data.userId || '',
-    title: data.title || 'Brief Bot PPT',
-    subtitle: data.subtitle || '',
-    actionType: data.actionType || 'generated',
-    slideCount: Number(data.slideCount || 0),
-    template: data.template || 'floral',
-    fileName: data.fileName || '',
-    savedAt: data.savedAt || data.createdAt || null,
-    createdAt: data.createdAt || null,
-    updatedAt: data.updatedAt || null
-  };
 }
 
 function safeUser(profile = {}) {
@@ -392,8 +371,8 @@ function getModelList() {
 const MIN_TRANSCRIPT_WORDS = 60;
 const MAX_TRANSCRIPT_CHARS = 30000;
 const SUMMARY_INPUT_CHARS = 7000; // Safe input budget for Cerebras summary calls
-const TIMELINE_SAMPLE_CHARS = 14000; // More transcript coverage for reliable full-video summary points
-const SUMMARY_MAX_TOKENS = 3200;
+const TIMELINE_SAMPLE_CHARS = 9500; // More transcript coverage for richer brief paragraphs
+const SUMMARY_MAX_TOKENS = 2600;
 const CHAT_MAX_TOKENS = 250;
 const QUESTION_MAX_TOKENS = 350;
 const ANSWER_MAX_TOKENS = 300;
@@ -472,11 +451,10 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'brief-bot-no-fake-summary-final-2026-06-18',
+    version: 'brief-bot-admin-dashboard-users-only-2026-06-01-v9',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
-    transcriptionKeyLoaded: (process.env.GROQ_TRANSCRIPTION_API_KEY || process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY) ? 'YES' : 'NO',
     models: getModelList(),
     port
   });
@@ -818,169 +796,12 @@ function buildGroupedTranscript(lines) {
     .slice(0, MAX_TRANSCRIPT_CHARS);
 }
 
-function decodeCaptionText(value = '') {
-  return cleanText(String(value || '')
-    .replace(/\n/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>'));
-}
-
-function parseYouTubePlayerResponse(html = '') {
-  const text = String(html || '');
-  const patterns = [
-    /ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});/,
-    /window\["ytInitialPlayerResponse"\]\s*=\s*(\{[\s\S]+?\});/,
-    /var\s+ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});/
-  ];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match?.[1]) {
-      try {
-        return JSON.parse(match[1]);
-      } catch (error) {
-        console.log('[TimedText] Player response JSON parse failed:', error.message);
-      }
-    }
-  }
-
-  return null;
-}
-
-function pickBestCaptionTrack(captionTracks = [], selectedLanguage = 'English') {
-  if (!Array.isArray(captionTracks) || !captionTracks.length) return null;
-
-  const preferredCodes = Array.from(new Set([
-    ...languageToCaptionCodes(selectedLanguage),
-    'en', 'te', 'hi', 'ta', 'kn', 'ml'
-  ].filter(Boolean).map((item) => String(item).toLowerCase())));
-
-  for (const code of preferredCodes) {
-    const exact = captionTracks.find((track) => String(track.languageCode || '').toLowerCase() === code);
-    if (exact) return exact;
-
-    const startsWith = captionTracks.find((track) => String(track.languageCode || '').toLowerCase().startsWith(code.split('-')[0]));
-    if (startsWith) return startsWith;
-  }
-
-  const autoTrack = captionTracks.find((track) => track.kind === 'asr');
-  if (autoTrack) return autoTrack;
-
-  return captionTracks[0];
-}
-
-function parseJson3CaptionLines(payload) {
-  const lines = [];
-  const events = Array.isArray(payload?.events) ? payload.events : [];
-
-  for (const event of events) {
-    const segs = Array.isArray(event.segs) ? event.segs : [];
-    const text = decodeCaptionText(segs.map((seg) => seg.utf8 || '').join(''));
-    if (!text || /^\s*$/.test(text)) continue;
-
-    lines.push({
-      start: Number(event.tStartMs || 0) / 1000,
-      text
-    });
-  }
-
-  return lines;
-}
-
-function parseXmlCaptionLines(xml = '') {
-  const lines = [];
-  const matches = [...String(xml || '').matchAll(/<text[^>]+start=["']([^"']+)["'][^>]*>([\s\S]*?)<\/text>/g)];
-
-  for (const match of matches) {
-    const start = Number(match[1] || 0);
-    const text = decodeCaptionText(match[2] || '');
-    if (!text) continue;
-    lines.push({ start, text });
-  }
-
-  return lines;
-}
-
-async function fetchYouTubeTranscriptFromTimedText(videoId, selectedLanguage) {
-  try {
-    const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=en`;
-    const { data: html } = await axios.get(watchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9'
-      },
-      timeout: 12000
-    });
-
-    const playerResponse = parseYouTubePlayerResponse(html);
-    const captionTracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-    const track = pickBestCaptionTrack(captionTracks, selectedLanguage);
-
-    if (!track?.baseUrl) {
-      console.log('[TimedText] No captionTracks found for video:', videoId);
-      return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
-    }
-
-    const baseUrl = String(track.baseUrl).replace(/\\u0026/g, '&');
-    const jsonUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}fmt=json3`;
-
-    try {
-      const { data: jsonPayload } = await axios.get(jsonUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        timeout: 12000
-      });
-
-      const lines = parseJson3CaptionLines(jsonPayload);
-      if (lines.length) {
-        const groupedTranscript = buildGroupedTranscript(lines);
-        const words = countWords(groupedTranscript);
-        console.log(`[TimedText] lang=${track.languageCode || 'auto'}, captionLines=${lines.length}, groupedWords=${words}`);
-        return {
-          ok: words >= MIN_TRANSCRIPT_WORDS,
-          tooShort: words < MIN_TRANSCRIPT_WORDS,
-          text: groupedTranscript,
-          captionCount: lines.length,
-          langUsed: track.languageCode || 'timedtext',
-          sourceType: 'timedtext-captions'
-        };
-      }
-    } catch (jsonError) {
-      console.log('[TimedText] json3 failed, trying XML:', jsonError.message);
-    }
-
-    const { data: xmlPayload } = await axios.get(baseUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-      timeout: 12000
-    });
-
-    const xmlLines = parseXmlCaptionLines(xmlPayload);
-    const groupedTranscript = buildGroupedTranscript(xmlLines);
-    const words = countWords(groupedTranscript);
-    console.log(`[TimedText XML] lang=${track.languageCode || 'auto'}, captionLines=${xmlLines.length}, groupedWords=${words}`);
-
-    return {
-      ok: words >= MIN_TRANSCRIPT_WORDS,
-      tooShort: words < MIN_TRANSCRIPT_WORDS,
-      text: groupedTranscript,
-      captionCount: xmlLines.length,
-      langUsed: track.languageCode || 'timedtext-xml',
-      sourceType: 'timedtext-captions'
-    };
-  } catch (error) {
-    console.log('[TimedText] fallback failed:', error.message);
-    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
-  }
-}
-
 async function fetchYouTubeTranscript(videoId, selectedLanguage) {
   if (!videoId || typeof videoId !== 'string' || videoId.trim().length !== 11) {
     return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
   }
 
-  const langs = Array.from(new Set([...languageToCaptionCodes(selectedLanguage), 'en', 'te', 'hi', 'ta', 'kn', 'ml']));
+  const langs = Array.from(new Set([...languageToCaptionCodes(selectedLanguage), 'en']));
 
   for (const lang of langs) {
     try {
@@ -1001,15 +822,6 @@ async function fetchYouTubeTranscript(videoId, selectedLanguage) {
     } catch (err) {
       console.log(`[Transcript] Failed lang=${lang}: ${err.message}`);
     }
-  }
-
-  const timedTextTranscript = await fetchYouTubeTranscriptFromTimedText(videoId.trim(), selectedLanguage);
-  if (timedTextTranscript?.ok && timedTextTranscript?.text) {
-    return timedTextTranscript;
-  }
-
-  if (timedTextTranscript?.tooShort && timedTextTranscript?.text) {
-    return timedTextTranscript;
   }
 
   return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
@@ -1107,196 +919,6 @@ function buildFallbackTranscriptFromMetadata(meta = {}, videoId = '') {
   return chunks.join('\n').slice(0, MAX_TRANSCRIPT_CHARS);
 }
 
-function getTranscriptionProviderConfig() {
-  const groqKey = process.env.GROQ_TRANSCRIPTION_API_KEY || process.env.GROQ_API_KEY || '';
-  if (groqKey) {
-    return {
-      provider: 'groq',
-      apiKey: groqKey,
-      endpoint: 'https://api.groq.com/openai/v1/audio/transcriptions',
-      model: process.env.GROQ_TRANSCRIPTION_MODEL || process.env.TRANSCRIPTION_MODEL || 'whisper-large-v3-turbo'
-    };
-  }
-
-  const openAiKey = process.env.OPENAI_API_KEY || '';
-  if (openAiKey) {
-    return {
-      provider: 'openai',
-      apiKey: openAiKey,
-      endpoint: 'https://api.openai.com/v1/audio/transcriptions',
-      model: process.env.OPENAI_TRANSCRIPTION_MODEL || process.env.TRANSCRIPTION_MODEL || 'whisper-1'
-    };
-  }
-
-  return null;
-}
-
-async function cleanupFile(filePath) {
-  try {
-    if (filePath && fs.existsSync(filePath)) await fs.promises.unlink(filePath);
-  } catch (error) {
-    console.log('[Audio Transcription] cleanup skipped:', error.message);
-  }
-}
-
-async function downloadYouTubeAudioForTranscription(videoId) {
-  const safeVideoId = String(videoId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16);
-  const prefix = `briefbot-${safeVideoId}-${Date.now()}`;
-  const outputTemplate = path.join(os.tmpdir(), `${prefix}.%(ext)s`);
-  const videoUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
-
-  await youtubedl(videoUrl, {
-    extractAudio: true,
-    audioFormat: 'mp3',
-    audioQuality: '5',
-    output: outputTemplate,
-    noPlaylist: true,
-    noWarnings: true,
-    preferFreeFormats: true,
-    ffmpegLocation: ffmpegPath || undefined,
-    maxFilesize: '35m'
-  });
-
-  const tempFiles = await fs.promises.readdir(os.tmpdir());
-  const matchedFiles = tempFiles
-    .filter((name) => name.startsWith(prefix))
-    .map((name) => path.join(os.tmpdir(), name))
-    .filter((filePath) => fs.existsSync(filePath));
-
-  const mp3File = matchedFiles.find((filePath) => filePath.toLowerCase().endsWith('.mp3')) || matchedFiles[0];
-  if (!mp3File) {
-    throw new Error('Audio download finished but no audio file was created in temp folder.');
-  }
-
-  const stats = await fs.promises.stat(mp3File);
-  if (!stats.size || stats.size < 1024) {
-    throw new Error('Audio file was created but it is empty or too small.');
-  }
-
-  console.log(`[Audio Transcription] audioFile=${path.basename(mp3File)}, sizeMB=${(stats.size / (1024 * 1024)).toFixed(2)}`);
-  return mp3File;
-}
-
-function buildTranscriptFromTranscriptionResponse(payload) {
-  const segments = Array.isArray(payload?.segments) ? payload.segments : [];
-
-  if (segments.length) {
-    const lines = segments
-      .map((segment) => ({
-        start: Number(segment.start || 0),
-        text: cleanText(segment.text || '')
-      }))
-      .filter((line) => line.text);
-
-    return buildGroupedTranscript(lines);
-  }
-
-  const fullText = cleanText(payload?.text || '');
-  if (!fullText) return '';
-
-  const words = fullText.split(/\s+/).filter(Boolean);
-  const lines = [];
-  const wordsPerGroup = 45;
-
-  for (let index = 0; index < words.length; index += wordsPerGroup) {
-    lines.push({
-      start: Math.floor(index / wordsPerGroup) * TIMESTAMP_GROUP_SECONDS,
-      text: words.slice(index, index + wordsPerGroup).join(' ')
-    });
-  }
-
-  return buildGroupedTranscript(lines);
-}
-
-function formatAudioTranscriptionFailure(message = '') {
-  const value = String(message || '');
-  const lower = value.toLowerCase();
-
-  if (lower.includes('sign in to confirm') || lower.includes('not a bot') || lower.includes('cookies-from-browser') || lower.includes('cookies')) {
-    return 'This video does not provide accessible captions, and YouTube blocked audio extraction on the deployed server. Please try another YouTube video with captions/auto-captions.';
-  }
-
-  if (lower.includes('private') || lower.includes('unavailable') || lower.includes('deleted')) {
-    return 'This video is not accessible to the server. It may be private, deleted, unavailable, or restricted.';
-  }
-
-  if (lower.includes('max-filesize') || lower.includes('larger than')) {
-    return 'This video audio is too large for server transcription. Please try a shorter video.';
-  }
-
-  if (lower.includes('transcription failed') || lower.includes('invalid api key') || lower.includes('unauthorized')) {
-    return 'Audio transcription failed. Please check GROQ_TRANSCRIPTION_API_KEY in Render Environment.';
-  }
-
-  return `Captions were unavailable and audio transcription failed: ${value.slice(0, 220)}`;
-}
-
-async function transcribeYouTubeAudioFallback(videoId, selectedLanguage) {
-  const config = getTranscriptionProviderConfig();
-  if (!config) {
-    console.log('[Audio Transcription] No transcription key found. Add GROQ_TRANSCRIPTION_API_KEY or OPENAI_API_KEY.');
-    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
-  }
-
-  let audioPath = '';
-
-  try {
-    console.log(`[Audio Transcription] Downloading audio for video=${videoId}, provider=${config.provider}, model=${config.model}`);
-    audioPath = await downloadYouTubeAudioForTranscription(videoId);
-
-    const audioBuffer = await fs.promises.readFile(audioPath);
-    const form = new FormData();
-    form.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), `${videoId}.mp3`);
-    form.append('model', config.model);
-    form.append('response_format', 'verbose_json');
-    form.append('temperature', '0');
-
-    if (selectedLanguage && selectedLanguage !== 'English') {
-      const languageCode = languageToCaptionCodes(selectedLanguage)?.[0];
-      if (languageCode && /^[a-z]{2}/i.test(languageCode)) {
-        form.append('language', languageCode.slice(0, 2).toLowerCase());
-      }
-    }
-
-    const response = await fetch(config.endpoint, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${config.apiKey}` },
-      body: form
-    });
-
-    const rawText = await response.text();
-    let data = {};
-    try {
-      data = rawText ? JSON.parse(rawText) : {};
-    } catch {
-      throw new Error(`Transcription returned non-JSON response: ${rawText.slice(0, 160)}`);
-    }
-
-    if (!response.ok) {
-      throw new Error(data.error?.message || data.error || `Transcription failed with status ${response.status}`);
-    }
-
-    const transcriptText = buildTranscriptFromTranscriptionResponse(data);
-    const words = countWords(transcriptText);
-    console.log(`[Audio Transcription] words=${words}, chars=${transcriptText.length}`);
-
-    return {
-      ok: words >= MIN_TRANSCRIPT_WORDS,
-      tooShort: words < MIN_TRANSCRIPT_WORDS,
-      text: transcriptText,
-      captionCount: Array.isArray(data.segments) ? data.segments.length : 0,
-      langUsed: data.language || selectedLanguage || 'audio',
-      sourceType: 'audio-transcription',
-      fallbackUsed: false
-    };
-  } catch (error) {
-    console.log('[Audio Transcription] failed:', error.message);
-    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null, errorMessage: formatAudioTranscriptionFailure(error.message || 'Audio transcription failed.') };
-  } finally {
-    await cleanupFile(audioPath);
-  }
-}
-
 async function getYouTubeContentWithFallback(videoId, selectedLanguage, originalUrl = '') {
   let transcript = getCachedTranscript(videoId, selectedLanguage);
   if (!transcript) {
@@ -1305,27 +927,7 @@ async function getYouTubeContentWithFallback(videoId, selectedLanguage, original
 
   if (transcript?.ok && transcript?.text) {
     setCachedTranscript(videoId, selectedLanguage, transcript);
-    return { ...transcript, sourceType: transcript.sourceType || 'captions', fallbackUsed: false };
-  }
-
-  const audioTranscript = await transcribeYouTubeAudioFallback(videoId, selectedLanguage);
-  if (audioTranscript?.ok && audioTranscript?.text) {
-    setCachedTranscript(videoId, selectedLanguage, audioTranscript);
-    return { ...audioTranscript, sourceType: 'audio-transcription', fallbackUsed: false };
-  }
-
-  // When a transcription key is configured, do not silently show a fake metadata-only summary.
-  // A clear error is better than a wrong project demo summary.
-  if (getTranscriptionProviderConfig() && process.env.ALLOW_METADATA_FALLBACK !== 'true') {
-    return {
-      ok: false,
-      text: '',
-      captionCount: 0,
-      langUsed: selectedLanguage || 'audio',
-      sourceType: 'audio-transcription-failed',
-      fallbackUsed: false,
-      errorMessage: audioTranscript?.errorMessage || 'This video does not provide accessible captions, and audio transcription failed on the deployed server. Please try another YouTube video with captions/auto-captions.'
-    };
+    return { ...transcript, sourceType: 'captions', fallbackUsed: false };
   }
 
   const metadata = await fetchYouTubeMetadataFallback(videoId, originalUrl);
@@ -1555,21 +1157,21 @@ function compactTranscriptLine(line, maxTextChars) {
 function getTimelinePointCount(durationSeconds, lineCount, summaryType = 'brief') {
   if (lineCount <= 4) return lineCount;
 
-  // More points = better full-video coverage for PPT and assessment quality.
-  // Keep it controlled so free-tier APIs do not fail.
+  // Bullets mode = only important points, so keep fewer/high-value points.
   if (summaryType === 'bullets') {
-    if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(6, lineCount);
-    if (durationSeconds <= 12 * 60) return Math.min(9, lineCount);
-    if (durationSeconds <= 25 * 60) return Math.min(12, lineCount);
-    if (durationSeconds <= 45 * 60) return Math.min(14, lineCount);
-    return Math.min(16, lineCount);
+    if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(5, lineCount);
+    if (durationSeconds <= 12 * 60) return Math.min(7, lineCount);
+    if (durationSeconds <= 25 * 60) return Math.min(9, lineCount);
+    if (durationSeconds <= 45 * 60) return Math.min(10, lineCount);
+    return Math.min(11, lineCount);
   }
 
-  if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(9, lineCount);
-  if (durationSeconds <= 12 * 60) return Math.min(14, lineCount);
-  if (durationSeconds <= 25 * 60) return Math.min(18, lineCount);
-  if (durationSeconds <= 45 * 60) return Math.min(22, lineCount);
-  return Math.min(24, lineCount);
+  // Brief mode = main summary, so give more complete coverage from start to end.
+  if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(7, lineCount);
+  if (durationSeconds <= 12 * 60) return Math.min(10, lineCount);
+  if (durationSeconds <= 25 * 60) return Math.min(13, lineCount);
+  if (durationSeconds <= 45 * 60) return Math.min(15, lineCount);
+  return Math.min(16, lineCount);
 }
 
 function sampleTranscriptForFullCoverage(transcript, durationSeconds, summaryType = 'brief') {
@@ -1624,112 +1226,6 @@ function getTranscriptTimeRange(transcript) {
 
 function hasEndSummaryMarker(text) {
   return String(text || '').includes('[[END_SUMMARY]]');
-}
-
-function extractSelectedTimelinePoints(selectedTranscript) {
-  const lines = String(selectedTranscript || '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const points = [];
-  const seenSeconds = new Set();
-
-  for (const line of lines) {
-    const match = line.match(/^Point\s+\d+:\s*(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/i);
-    if (!match) continue;
-
-    const seconds = timestampToSeconds(match[1]);
-    if (seenSeconds.has(seconds)) continue;
-    seenSeconds.add(seconds);
-
-    points.push({
-      timestamp: match[1],
-      seconds,
-      text: cleanText(match[2])
-    });
-  }
-
-  return points.sort((a, b) => a.seconds - b.seconds);
-}
-
-function stripBadLeadingTimestampAndNumbering(line) {
-  return String(line || '')
-    .replace(/^\s*(?:[-*•]\s*)?\d+[.)]\s*/g, '')
-    .replace(/^\s*(?:⏱\s*)?\d{1,2}[.:]\d{1,2}(?:(?:[.:])\d{1,2})?\s*/g, '')
-    .replace(/^\s*(?:⏱\s*)?\d{1,2}:\d{2}(?::\d{2})?\s*/g, '')
-    .replace(/^\s*ID\s*\d+\s*[:.)-]\s*/i, '')
-    .replace(/^\s*[-–—:]+\s*/g, '')
-    .trim();
-}
-
-function extractStrictSummaryTimestamps(summaryText) {
-  const matches = [...String(summaryText || '').matchAll(/(?:^|\n)\s*(?:[-*]\s*)?(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\b/g)];
-  return matches.map((match) => ({ timestamp: match[1], seconds: timestampToSeconds(match[1]) }));
-}
-
-function validateSummaryTimelineCoverage(summaryText, durationSeconds = 0) {
-  const points = extractStrictSummaryTimestamps(summaryText);
-
-  if (points.length < 3) {
-    return { ok: false, reason: 'Too few valid timestamped points.' };
-  }
-
-  for (let index = 1; index < points.length; index += 1) {
-    if (points[index].seconds < points[index - 1].seconds) {
-      return { ok: false, reason: 'Timestamps are not in chronological order.' };
-    }
-  }
-
-  if (durationSeconds >= 6 * 60) {
-    const lastSecond = points[points.length - 1].seconds;
-    const requiredCoverage = Math.max(60, Math.floor(durationSeconds * 0.72));
-    if (lastSecond < requiredCoverage) {
-      return { ok: false, reason: `Summary stopped too early at ${secondsToTimestamp(lastSecond)} instead of covering near ${secondsToTimestamp(durationSeconds)}.` };
-    }
-  }
-
-  return { ok: true, reason: 'Timeline coverage is valid.' };
-}
-
-function createDeterministicFullCoverageSummary(selectedTranscript, summaryType = 'brief') {
-  const points = extractSelectedTimelinePoints(selectedTranscript);
-
-  if (!points.length) {
-    return '⏱ 0:00 Summary could not be generated with valid timeline coverage. Please try again.';
-  }
-
-  if (summaryType === 'bullets') {
-    return points
-      .map((point) => `⏱ ${point.timestamp} ${clipTranscriptToCompleteSentence(point.text, 170)}`)
-      .join('\n');
-  }
-
-  return points
-    .map((point) => `⏱ ${point.timestamp} ${clipTranscriptToCompleteSentence(point.text, 260)} This part is included in correct video order to preserve full timeline coverage.`)
-    .join('\n\n');
-}
-
-function parseAiIdSummaries(aiText) {
-  const idSummaryMap = new Map();
-  const lines = String(aiText || '')
-    .replace(/\[\[END_SUMMARY\]\]/g, '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  lines.forEach((line) => {
-    const match = line.match(/^ID\s*(\d+)\s*[:.)-]\s*(.+)$/i);
-    if (!match) return;
-
-    const id = Number(match[1]);
-    const cleaned = stripBadLeadingTimestampAndNumbering(match[2]);
-    if (id && cleaned.length > 10) {
-      idSummaryMap.set(id, cleaned);
-    }
-  });
-
-  return idSummaryMap;
 }
 
 async function generateCompleteSummaryWithRetry(basePrompt, targetLanguage, isBullets, pointCount) {
@@ -1788,75 +1284,64 @@ async function summarizeWithTimestamps(transcript, language, summaryType) {
   const durationSeconds = estimateVideoDurationFromTranscript(transcript);
   const timeRange = getTranscriptTimeRange(transcript);
   const selectedTranscript = sampleTranscriptForFullCoverage(transcript, durationSeconds, summaryType);
-  const timelinePoints = extractSelectedTimelinePoints(selectedTranscript);
+  const pointCount = (selectedTranscript.match(/^Point\s+\d+:/gm) || []).length || 5;
   const isBullets = summaryType === 'bullets';
 
-  console.log(`[Summary Stable V3] duration=${durationSeconds}s, range=${timeRange.start}-${timeRange.end}, timelinePoints=${timelinePoints.length}, inputChars=${selectedTranscript.length}`);
+  console.log(`[Summary] duration=${durationSeconds}s, range=${timeRange.start}-${timeRange.end}, points=${pointCount}, inputChars=${selectedTranscript.length}`);
+  console.log('[Summary] selected first:', selectedTranscript.split('\n').slice(0, 2).join(' | '));
+  console.log('[Summary] selected last:', selectedTranscript.split('\n').slice(-2).join(' | '));
 
-  if (!timelinePoints.length) {
-    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
+  const prompt = isBullets
+    ? `Output language: ${targetLanguage}
+
+Create an IMPORTANT POINTS summary for the WHOLE video.
+
+BULLETS MODE RULES:
+- Use the selected timeline points below from beginning, middle, and end.
+- Produce exactly ${pointCount} important timestamped bullets, one for each Point.
+- Every bullet must start with the timestamp from that Point.
+- Mention only useful/high-value information. Remove filler, greetings, repeated statements, and unimportant examples.
+- Do NOT copy transcript lines directly; rewrite in clean student-friendly meaning.
+- Keep every bullet short, complete, and easy to revise.
+- Every bullet must end as a complete sentence. Never end with and, for, where, with, to, of, because, including, or like.
+- Include the final/end timestamp near ${timeRange.end}.
+- Do not add headings.
+- End with [[END_SUMMARY]].
+
+Selected timeline points:
+${selectedTranscript}`
+    : `Output language: ${targetLanguage}
+
+Create a COMPLETE timestamped BRIEF SUMMARY using PARAGRAPH-STYLE POINTS ONLY for the WHOLE video.
+
+BRIEF MODE RULES:
+- Use the selected timeline points below from beginning, middle, and end.
+- Produce exactly ${Math.max(pointCount, 8)} timestamped paragraph-style summary points.
+- Every point must start with a timestamp from the selected timeline points.
+- Do NOT use bullet symbols, headings, numbering, tables, or labels like "Point 1".
+- Each timestamped point must be a small paragraph of 2 complete sentences.
+- Give MORE INFORMATION from the video: include important facts, names, examples, numbers, comparisons, causes, effects, steps, results, and conclusions when present.
+- Keep the language neat, simple, and student-friendly.
+- Do NOT copy transcript lines directly; rewrite the meaning clearly.
+- Remove filler, greetings, repeated lines, sponsor talk, and unnecessary conversation.
+- Use **bold** only for very important keywords.
+- Cover the complete video from ${timeRange.start} to ${timeRange.end}, including the final/end timestamp near ${timeRange.end}.
+- Every sentence must be complete. Do not stop in the middle.
+- Never end a point with and, for, where, with, to, of, because, including, or like.
+- End with [[END_SUMMARY]].
+
+Selected timeline points:
+${selectedTranscript}`;
+
+  const cleaned = await generateCompleteSummaryWithRetry(prompt, targetLanguage, isBullets, pointCount);
+
+  if (!cleaned || cleaned.length < 40) {
+    throw new Error('Summary generation returned empty output. Please try again.');
   }
 
-  const pointInput = timelinePoints
-    .map((point, index) => `ID ${index + 1}: ${clipTranscriptToCompleteSentence(point.text, isBullets ? 260 : 380)}`)
-    .join('\n');
-
-  const prompt = `Output language: ${targetLanguage}
-
-You are creating the text part of a full-video summary for a learning website.
-The backend will add the timestamps later, so you must NOT write timestamps.
-
-STRICT OUTPUT RULES:
-- Return exactly ${timelinePoints.length} lines.
-- Use this exact format only: ID 1: summary text
-- Keep ID order from 1 to ${timelinePoints.length}.
-- Do NOT write timestamps.
-- Do NOT write bullet symbols, headings, tables, or numbering other than the ID label.
-- Do NOT stop in the middle of a sentence.
-- Do NOT copy transcript wording directly; explain the meaning clearly.
-- Write clear student-friendly English.
-${isBullets
-  ? '- Each ID line should be one short but useful sentence.'
-  : '- Each ID line should be 1 to 2 complete sentences with useful details for PPT and assessment generation.'}
-
-Transcript timeline points from full video:
-${pointInput}`;
-
-  let aiText = '';
-
-  try {
-    aiText = await generateText({
-      messages: [
-        {
-          role: 'system',
-          content: 'You summarize transcript points for a learning platform. You never create timestamps. You strictly return ID lines only.'
-        },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.04,
-      maxTokens: isBullets ? 1200 : 2400
-    });
-  } catch (error) {
-    console.warn('[Summary Stable V3] AI failed; using deterministic transcript timeline fallback:', error.message);
-    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
-  }
-
-  const idSummaryMap = parseAiIdSummaries(aiText);
-
-  const finalLines = timelinePoints.map((point, index) => {
-    const id = index + 1;
-    const aiSummary = idSummaryMap.get(id);
-    const fallbackSummary = clipTranscriptToCompleteSentence(point.text, isBullets ? 170 : 260);
-    const cleanSummary = clipTranscriptToCompleteSentence(stripBadLeadingTimestampAndNumbering(aiSummary || fallbackSummary), isBullets ? 220 : 380);
-    return `⏱ ${point.timestamp} ${cleanSummary}`;
-  });
-
-  const finalSummary = finalLines.join(isBullets ? '\n' : '\n\n');
-  const timelineCheck = validateSummaryTimelineCoverage(finalSummary, durationSeconds);
-
-  if (!timelineCheck.ok) {
-    console.warn('[Summary Stable V3] Timeline validation failed:', timelineCheck.reason);
-    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
+  const finalSummary = finalizeSummarySentences(cleaned);
+  if (!finalSummary || hasBrokenSummarySentences(finalSummary)) {
+    throw new Error('Summary validation failed because incomplete sentences were detected. Please try again.');
   }
 
   return finalSummary;
@@ -2170,10 +1655,9 @@ async function handleFirebaseLogin(req, res, expectedRole) {
 
 app.post('/api/social-login', async (req, res) => {
   try {
-    const { idToken, provider, expectedRole, roleMode, authIntent } = req.body || {};
+    const { idToken, provider, expectedRole, roleMode } = req.body || {};
     const cleanToken = String(idToken || '').trim();
     const roleToCheck = expectedRole === 'admin' || roleMode === 'admin' ? 'admin' : 'user';
-    const intent = ['signup', 'register'].includes(String(authIntent || '').toLowerCase()) ? 'signup' : 'signin';
 
     if (!cleanToken) {
       return res.status(400).json({ error: 'Firebase ID token is required.' });
@@ -2191,33 +1675,10 @@ app.post('/api/social-login', async (req, res) => {
     }
 
     const ref = usersCollection.doc(uid);
-    let docRef = ref;
-    let doc = await docRef.get();
+    const doc = await ref.get();
 
     if (!doc.exists) {
-      const existingEmailSnapshot = await usersCollection.where('email', '==', email).limit(1).get();
-      if (!existingEmailSnapshot.empty) {
-        doc = existingEmailSnapshot.docs[0];
-        docRef = doc.ref;
-      }
-    }
-
-    if (!doc.exists && intent !== 'signup') {
-      return res.status(404).json({
-        error: '⚠️ This Google account is not registered. Please sign up first, then use Google Sign In.',
-        requiresSignup: true
-      });
-    }
-
-    if (doc.exists && intent === 'signup') {
-      return res.status(409).json({
-        error: '✅ This Google account is already registered. Please use Sign In with Google.',
-        alreadyRegistered: true
-      });
-    }
-
-    if (!doc.exists && intent === 'signup') {
-      await docRef.set({
+      await ref.set({
         uid,
         name,
         email,
@@ -2232,15 +1693,13 @@ app.post('/api/social-login', async (req, res) => {
         questionsGenerated: 0,
         answersGenerated: 0,
         chatsSent: 0,
-        assessmentsAttempted: 0,
-        pptsGenerated: 0,
         createdAt: nowISO(),
         lastLoginAt: null,
         updatedAt: nowISO()
       });
     } else {
-      await docRef.set({
-        googleUid: uid,
+      await ref.set({
+        uid,
         name: doc.data()?.name || name,
         email,
         provider: providerName,
@@ -2251,7 +1710,7 @@ app.post('/api/social-login', async (req, res) => {
       }, { merge: true });
     }
 
-    const freshDoc = await docRef.get();
+    const freshDoc = await ref.get();
     const profile = { id: freshDoc.id, ...freshDoc.data() };
 
     if (roleToCheck === 'admin' && profile.role !== 'admin') {
@@ -2263,7 +1722,7 @@ app.post('/api/social-login', async (req, res) => {
     }
 
     const loginCount = Number(profile.loginCount || 0) + 1;
-    await docRef.update({
+    await ref.update({
       isLoggedIn: true,
       loginCount,
       lastLoginAt: nowISO(),
@@ -2271,17 +1730,13 @@ app.post('/api/social-login', async (req, res) => {
     });
 
     await addActivity({
-      userId: freshDoc.id,
-      type: roleToCheck === 'admin' ? 'admin_social_login' : intent === 'signup' ? 'social_signup' : 'social_login',
+      userId: uid,
+      type: roleToCheck === 'admin' ? 'admin_social_login' : 'social_login',
       meta: { provider: providerName }
     });
 
-    const updatedDoc = await docRef.get();
-    return res.json({
-      ok: true,
-      accountCreated: intent === 'signup',
-      user: safeUser({ id: updatedDoc.id, ...updatedDoc.data() })
-    });
+    const updatedDoc = await ref.get();
+    return res.json({ ok: true, user: safeUser({ id: updatedDoc.id, ...updatedDoc.data() }) });
   } catch (error) {
     console.error('[Firebase Social Login Error]', error.message);
     return res.status(401).json({ error: error.message || 'Google sign in failed.' });
@@ -3352,9 +2807,6 @@ function publicAssessment(assessmentDoc) {
     videoUrl: data.videoUrl || '',
     summary: data.summary || '',
     createdAt: data.createdAt || null,
-    completedAt: data.completedAt || null,
-    bossGateUnlocked: Boolean(data.bossGateUnlocked),
-    bossQualifiedUserIds: Array.isArray(data.bossQualifiedUserIds) ? data.bossQualifiedUserIds : [],
     bossBattle: data.bossBattle || null,
     questions: (data.questions || []).map((q, index) => {
       const type = q.type || data.questionType || 'mcq';
@@ -3423,108 +2875,83 @@ async function getUserProgressDetails(userId) {
 
   const user = safeUser({ id: userDoc.id, ...userDoc.data() });
 
-  let allSummaries = [];
+  let historySnapshot;
   try {
-    let historySnapshot;
-    try {
-      historySnapshot = await usersCollection.doc(cleanUserId).collection('summaryHistory').orderBy('updatedAt', 'desc').get();
-    } catch {
-      historySnapshot = await usersCollection.doc(cleanUserId).collection('summaryHistory').get();
-    }
-    allSummaries = historySnapshot.docs.map((doc) => safeHistoryItem(doc));
-  } catch (summaryError) {
-    console.error('[Admin Summary Details Warning]', summaryError.message);
+    historySnapshot = await usersCollection.doc(cleanUserId).collection('summaryHistory').orderBy('updatedAt', 'desc').get();
+  } catch {
+    historySnapshot = await usersCollection.doc(cleanUserId).collection('summaryHistory').get();
   }
+  const allSummaries = historySnapshot.docs.map((doc) => safeHistoryItem(doc));
 
-  let allPpts = [];
+  let pptSnapshot;
   try {
-    let pptSnapshot;
-    try {
-      pptSnapshot = await usersCollection.doc(cleanUserId).collection('savedPpts').orderBy('createdAt', 'desc').get();
-    } catch {
-      pptSnapshot = await usersCollection.doc(cleanUserId).collection('savedPpts').get();
-    }
-    allPpts = pptSnapshot.docs.map((doc) => safePptItem(doc));
-  } catch (pptError) {
-    console.error('[Admin PPT Details Warning]', pptError.message);
+    pptSnapshot = await usersCollection.doc(cleanUserId).collection('savedPpts').orderBy('createdAt', 'desc').get();
+  } catch {
+    pptSnapshot = await usersCollection.doc(cleanUserId).collection('savedPpts').get();
   }
+  const allPpts = pptSnapshot.docs.map((doc) => safePptItem(doc));
 
+  const assessmentSnapshot = await assessmentsCollection.orderBy('createdAt', 'desc').limit(250).get();
   const attempts = [];
   let assessmentsCreated = 0;
   let battleRoomsGenerated = 0;
   const battleRooms = [];
 
-  try {
-    let assessmentSnapshot;
-    try {
-      assessmentSnapshot = await assessmentsCollection.orderBy('createdAt', 'desc').limit(250).get();
-    } catch {
-      assessmentSnapshot = await assessmentsCollection.limit(250).get();
-    }
+  for (const assessmentDoc of assessmentSnapshot.docs) {
+    const assessmentData = assessmentDoc.data() || {};
 
-    for (const assessmentDoc of assessmentSnapshot.docs) {
-      const assessmentData = assessmentDoc.data() || {};
+    if (String(assessmentData.createdBy || '') === cleanUserId) {
+      assessmentsCreated += 1;
 
-      if (String(assessmentData.createdBy || '') === cleanUserId) {
-        assessmentsCreated += 1;
+      if (assessmentData.assessmentMode === 'battle') {
+        battleRoomsGenerated += 1;
+        const playersRaw = assessmentData.players || {};
+        const players = Array.isArray(playersRaw)
+          ? playersRaw
+          : Object.keys(playersRaw).map((playerId) => ({ userId: playerId, ...playersRaw[playerId] }));
 
-        if (assessmentData.assessmentMode === 'battle') {
-          battleRoomsGenerated += 1;
-          const playersRaw = assessmentData.players || {};
-          const players = Array.isArray(playersRaw)
-            ? playersRaw
-            : Object.keys(playersRaw).map((playerId) => ({ userId: playerId, ...playersRaw[playerId] }));
-
-          battleRooms.push({
-            id: assessmentDoc.id,
-            roomCode: assessmentData.roomCode || '',
-            title: assessmentData.title || 'Battle Room',
-            status: assessmentData.status || 'waiting',
-            source: 'assessments',
-            playerCount: players.length,
-            attemptedCount: players.filter((player) => player.submitted).length,
-            createdAt: assessmentData.createdAt || null,
-            startedAt: assessmentData.startedAt || null,
-            completedAt: assessmentData.completedAt || null
-          });
-        }
-      }
-
-      try {
-        const attemptSnapshot = await assessmentDoc.ref.collection('attempts').where('userId', '==', cleanUserId).get();
-        attemptSnapshot.docs.forEach((attemptDoc) => {
-          const attemptData = attemptDoc.data() || {};
-          attempts.push({
-            id: attemptDoc.id,
-            assessmentId: assessmentDoc.id,
-            assessmentTitle: assessmentData.title || 'Assessment',
-            assessmentMode: assessmentData.assessmentMode || 'solo',
-            questionType: assessmentData.questionType || 'mcq',
-            difficulty: assessmentData.difficulty || 'medium',
-            roomCode: assessmentData.roomCode || '',
-            score: Number(attemptData.score || 0),
-            totalMarks: Number(attemptData.totalMarks || assessmentData.questionCount || 20),
-            percentage: Number(attemptData.percentage || 0),
-            accuracy: Number(attemptData.accuracy || attemptData.percentage || 0),
-            remarks: attemptData.remarks || '',
-            achievement: attemptData.achievement || '',
-            timeTakenSeconds: Number(attemptData.timeTakenSeconds || 0),
-            submittedAt: attemptData.submittedAt || null,
-            autoSubmit: Boolean(attemptData.autoSubmit)
-          });
+        battleRooms.push({
+          id: assessmentDoc.id,
+          roomCode: assessmentData.roomCode || '',
+          title: assessmentData.title || 'Battle Room',
+          status: assessmentData.status || 'waiting',
+          source: 'assessments',
+          playerCount: players.length,
+          attemptedCount: players.filter((player) => player.submitted).length,
+          createdAt: assessmentData.createdAt || null,
+          startedAt: assessmentData.startedAt || null,
+          completedAt: assessmentData.completedAt || null
         });
-      } catch (attemptError) {
-        console.error('[Admin Attempt Details Warning]', attemptError.message);
       }
     }
-  } catch (assessmentError) {
-    console.error('[Admin Assessment Details Warning]', assessmentError.message);
+
+    const attemptSnapshot = await assessmentDoc.ref.collection('attempts').where('userId', '==', cleanUserId).get();
+    attemptSnapshot.docs.forEach((attemptDoc) => {
+      const attemptData = attemptDoc.data() || {};
+      attempts.push({
+        id: attemptDoc.id,
+        assessmentId: assessmentDoc.id,
+        assessmentTitle: assessmentData.title || 'Assessment',
+        assessmentMode: assessmentData.assessmentMode || 'solo',
+        questionType: assessmentData.questionType || 'mcq',
+        difficulty: assessmentData.difficulty || 'medium',
+        roomCode: assessmentData.roomCode || '',
+        score: Number(attemptData.score || 0),
+        totalMarks: Number(attemptData.totalMarks || assessmentData.questionCount || 20),
+        percentage: Number(attemptData.percentage || 0),
+        accuracy: Number(attemptData.accuracy || attemptData.percentage || 0),
+        remarks: attemptData.remarks || '',
+        achievement: attemptData.achievement || '',
+        timeTakenSeconds: Number(attemptData.timeTakenSeconds || 0),
+        submittedAt: attemptData.submittedAt || null,
+        autoSubmit: Boolean(attemptData.autoSubmit)
+      });
+    });
   }
 
   try {
     const oldBattleRoomsSnapshot = await firestoreDb.collection('battleRooms').where('hostId', '==', cleanUserId).get();
     battleRoomsGenerated += oldBattleRoomsSnapshot.size;
-
     oldBattleRoomsSnapshot.docs.forEach((doc) => {
       const data = doc.data() || {};
       const playersRaw = data.players || {};
@@ -3546,7 +2973,7 @@ async function getUserProgressDetails(userId) {
       });
     });
   } catch (battleError) {
-    console.error('[Admin Battle Details Warning]', battleError.message);
+    console.log('[User Progress Battle Count Warning]', battleError.message);
   }
 
   let smartCompareCount = 0;
@@ -3555,7 +2982,6 @@ async function getUserProgressDetails(userId) {
   try {
     const smartCompareReportsSnapshot = await firestoreDb.collection('smartCompareReports').where('userId', '==', cleanUserId).get();
     smartCompareCount += smartCompareReportsSnapshot.size;
-
     smartCompareReportsSnapshot.docs.forEach((doc) => {
       const data = doc.data() || {};
       smartCompares.push({
@@ -3572,30 +2998,35 @@ async function getUserProgressDetails(userId) {
       });
     });
   } catch (smartReportError) {
-    console.error('[Admin Smart Compare Details Warning]', smartReportError.message);
+    console.log('[User Progress Smart Compare Report Warning]', smartReportError.message);
   }
 
   try {
     const smartCompareActivitySnapshot = await activitiesCollection.where('userId', '==', cleanUserId).where('type', '==', 'smart_compare_generated').get();
     smartCompareCount = Math.max(smartCompareCount, smartCompareActivitySnapshot.size);
-
     smartCompareActivitySnapshot.docs.forEach((doc) => {
       const data = doc.data() || {};
-      smartCompares.push({
-        id: doc.id,
-        video1: data.meta?.video1 || '',
-        video2: data.meta?.video2 || '',
-        video1Topic: '',
-        video2Topic: '',
-        similarityScore: Number(data.meta?.similarityScore || 0),
-        isSimilar: Boolean(data.meta?.isSimilar),
-        bestOverall: '',
-        generatedAt: data.createdAt || null,
-        source: 'activities'
-      });
+      const duplicate = smartCompares.some((item) =>
+        String(item.video1 || '') === String(data.meta?.video1 || '') &&
+        String(item.video2 || '') === String(data.meta?.video2 || '')
+      );
+      if (!duplicate) {
+        smartCompares.push({
+          id: doc.id,
+          video1: data.meta?.video1 || '',
+          video2: data.meta?.video2 || '',
+          video1Topic: '',
+          video2Topic: '',
+          similarityScore: Number(data.meta?.similarityScore || 0),
+          isSimilar: Boolean(data.meta?.isSimilar),
+          bestOverall: '',
+          generatedAt: data.createdAt || null,
+          source: 'activities'
+        });
+      }
     });
   } catch (smartActivityError) {
-    console.error('[Admin Smart Compare Activity Warning]', smartActivityError.message);
+    console.log('[User Progress Smart Compare Activity Warning]', smartActivityError.message);
   }
 
   attempts.sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')));
@@ -3884,84 +3315,20 @@ app.get('/api/admin/stats', async (req, res) => {
 });
 
 app.get('/api/admin/users/:userId/progress', async (req, res) => {
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-
-  const fallbackResponse = {
-    ok: true,
-    user: {
-      id: String(req.params.userId || ''),
-      name: 'User',
-      email: '',
-      role: 'user'
-    },
-    summaries: [],
-    ppts: [],
-    attempts: [],
-    battleRooms: [],
-    smartCompares: [],
-    stats: {
-      summaryCount: 0,
-      pptCount: 0,
-      assessmentCount: 0,
-      assessmentsCreated: 0,
-      battleRoomCount: 0,
-      smartCompareCount: 0,
-      attemptCount: 0,
-      averageScore: 0,
-      highestScore: 0,
-      lowestScore: 0,
-      lastScore: 0,
-      lastAttemptAt: null,
-      lastSummaryAt: null,
-      lastPptAt: null
-    }
-  };
-
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     const { adminId } = req.query || {};
+    const adminProfile = await getUserProfile(adminId);
 
-    try {
-      const adminProfile = await getUserProfile(adminId);
-      if (!adminProfile || adminProfile.role !== 'admin') {
-        return res.status(403).json({ error: 'Admin access required.' });
-      }
-    } catch (adminCheckError) {
-      console.error('[Admin Check Warning]', adminCheckError.message);
+    if (!adminProfile || adminProfile.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required.' });
     }
 
-    try {
-      const progress = await getUserProgressDetails(req.params.userId);
-      return res.json({ ...fallbackResponse, ...progress, ok: true });
-    } catch (progressError) {
-      console.error('[Admin User Progress Details Warning]', progressError.message);
-
-      try {
-        const userDoc = await usersCollection.doc(String(req.params.userId || '').trim()).get();
-        if (userDoc.exists) {
-          const rawUser = { id: userDoc.id, ...userDoc.data() };
-          const userData = typeof safeUser === 'function' ? safeUser(rawUser) : rawUser;
-
-          fallbackResponse.user = userData;
-          fallbackResponse.stats.summaryCount = Number(userData.summariesGenerated || 0);
-          fallbackResponse.stats.pptCount = Number(userData.pptsGenerated || 0);
-          fallbackResponse.stats.battleRoomCount = Number(userData.battleRoomsGenerated || 0);
-          fallbackResponse.stats.smartCompareCount = Number(userData.smartCompares || 0);
-        }
-      } catch (fallbackError) {
-        console.error('[Admin User Fallback Warning]', fallbackError.message);
-      }
-
-      return res.json({
-        ...fallbackResponse,
-        warning: progressError.message || 'Partial user details loaded.'
-      });
-    }
+    const progress = await getUserProgressDetails(req.params.userId);
+    return res.json({ ok: true, ...progress });
   } catch (error) {
-    console.error('[Admin User Progress Safe Fallback]', error.message);
-    return res.json({
-      ...fallbackResponse,
-      warning: error.message || 'Safe fallback loaded.'
-    });
+    console.error('[Admin User Progress Error]', error);
+    return res.status(500).json({ error: error.message });
   }
 });
 
@@ -4177,7 +3544,7 @@ app.post('/api/analyze', async (req, res) => {
 
         if (!transcript.ok) {
           return res.status(422).json({
-            error: transcript.errorMessage || '⚠️ This YouTube link is not accessible enough to process. It may be private, deleted, age-restricted, live-only, region-blocked, or captions/audio transcription are unavailable.'
+            error: '⚠️ This YouTube link is not accessible enough to process. It may be private, deleted, age-restricted, live-only, or region-blocked.'
           });
         }
 
@@ -4606,94 +3973,6 @@ async function getBossLeaderboard(assessmentId, finalCompleted = false) {
     }));
 }
 
-
-function normalizeBattlePlayersMap(players = {}) {
-  if (Array.isArray(players)) {
-    return players.reduce((acc, player) => {
-      const id = String(player?.userId || player?.id || '').trim();
-      if (id) acc[id] = { ...player, userId: id };
-      return acc;
-    }, {});
-  }
-
-  return Object.keys(players || {}).reduce((acc, id) => {
-    const cleanId = String(id || '').trim();
-    if (cleanId) acc[cleanId] = { ...(players[id] || {}), userId: cleanId };
-    return acc;
-  }, {});
-}
-
-async function finalizeBattleCompletionIfReady(ref, assessmentId, assessmentData = {}) {
-  const players = normalizeBattlePlayersMap(assessmentData.players || {});
-  const leaderboard = await getLeaderboard(assessmentId);
-  const submittedIds = new Set((leaderboard || []).map((player) => String(player.userId || player.id || '')).filter(Boolean));
-
-  (leaderboard || []).forEach((player) => {
-    const id = String(player.userId || player.id || '').trim();
-    if (!id) return;
-    players[id] = {
-      ...(players[id] || {}),
-      userId: id,
-      name: player.userName || player.name || players[id]?.name || 'Player',
-      email: player.userEmail || players[id]?.email || '',
-      submitted: true,
-      score: Number(player.score || 0),
-      totalMarks: Number(player.totalMarks || 20),
-      percentage: Number(player.percentage || player.accuracy || 0),
-      accuracy: Number(player.accuracy || player.percentage || 0),
-      rank: player.rank,
-      remarks: player.remarks,
-      achievement: player.achievement,
-      submittedAt: player.submittedAt || players[id]?.submittedAt || nowISO(),
-      timeTakenSeconds: Number(player.timeTakenSeconds || players[id]?.timeTakenSeconds || 0),
-      isHost: Boolean(players[id]?.isHost),
-      role: players[id]?.role || (String(assessmentData.createdBy || '') === id ? 'host' : 'player')
-    };
-  });
-
-  const playerList = Object.values(players);
-  const allSubmitted = playerList.length >= 2 &&
-    playerList.every((player) => {
-      const id = String(player.userId || player.id || '').trim();
-      return Boolean(player.submitted) || submittedIds.has(id);
-    });
-
-  const baseUpdate = {
-    players,
-    leaderboard,
-    updatedAt: nowISO()
-  };
-
-  if (allSubmitted) {
-    const qualifiers = getBossQualifiersFromLeaderboard(leaderboard);
-    await ref.set({
-      ...baseUpdate,
-      status: 'completed',
-      completedAt: assessmentData.completedAt || nowISO(),
-      bossGateUnlocked: true,
-      bossQualifiedUserIds: qualifiers.map((player) => String(player.userId || player.id || '')).filter(Boolean)
-    }, { merge: true });
-
-    const updatedDoc = await ref.get();
-    return {
-      allSubmitted: true,
-      leaderboard,
-      players,
-      assessment: updatedDoc.data() || { ...assessmentData, ...baseUpdate, status: 'completed' }
-    };
-  }
-
-  await ref.set(baseUpdate, { merge: true });
-  const updatedDoc = await ref.get();
-  return {
-    allSubmitted: false,
-    leaderboard,
-    players,
-    assessment: updatedDoc.data() || { ...assessmentData, ...baseUpdate }
-  };
-}
-
-
 function scoreBossQuestions(questionList = [], cleanAnswers = {}) {
   let score = 0;
   const review = [];
@@ -4831,19 +4110,20 @@ app.post('/api/assessments/:assessmentId/submit', async (req, res) => {
             ...updatedPlayers[player.userId],
             rank: player.rank,
             remarks: player.remarks,
-            achievement: player.achievement,
-            submitted: true
+            achievement: player.achievement
           };
         }
       });
 
+      const playerList = Object.values(updatedPlayers || {});
+      const allSubmitted = playerList.length > 0 && playerList.every((player) => player.submitted);
       await ref.set({
         players: updatedPlayers,
         leaderboard,
+        status: allSubmitted ? 'completed' : (assessment.status || 'active'),
+        completedAt: allSubmitted ? nowISO() : (assessment.completedAt || null),
         updatedAt: nowISO()
       }, { merge: true });
-
-      await finalizeBattleCompletionIfReady(ref, assessmentId, { ...assessment, players: updatedPlayers, leaderboard });
     }
 
     const updatedDoc = await ref.get();
@@ -4872,23 +4152,19 @@ app.post('/api/assessments/:assessmentId/boss/start', async (req, res) => {
     const doc = await ref.get();
     if (!doc.exists) return res.status(404).json({ error: 'Assessment not found.' });
 
-    let assessment = doc.data() || {};
+    const assessment = doc.data() || {};
     if (assessment.assessmentMode !== 'battle') return res.status(400).json({ error: 'Boss Battle is available only for Battle Room.' });
 
-    const finalization = await finalizeBattleCompletionIfReady(ref, assessmentId, assessment);
-    assessment = finalization.assessment || assessment;
-
-    const playersForBoss = Object.values(normalizeBattlePlayersMap(assessment.players || {}));
-    const allBattlePlayersSubmitted = Boolean(finalization.allSubmitted) ||
-      (playersForBoss.length >= 2 && playersForBoss.every((player) => player.submitted));
-
-    if (!allBattlePlayersSubmitted && assessment.status !== 'completed') {
-      return res.status(400).json({ error: 'Boss Battle unlocks after all players submit.' });
+    const playersForBoss = Object.values(assessment.players || {});
+    const allBattlePlayersSubmitted = playersForBoss.length >= 2 && playersForBoss.every((player) => player.submitted);
+    if (assessment.status !== 'completed' && allBattlePlayersSubmitted) {
+      await ref.set({ status: 'completed', completedAt: assessment.completedAt || nowISO(), updatedAt: nowISO() }, { merge: true });
+      assessment.status = 'completed';
     }
 
-    let leaderboard = Array.isArray(finalization.leaderboard) && finalization.leaderboard.length
-      ? finalization.leaderboard
-      : await getLeaderboard(assessmentId);
+    if (assessment.status !== 'completed') return res.status(400).json({ error: 'Boss Battle unlocks after all players submit.' });
+
+    let leaderboard = await getLeaderboard(assessmentId);
     if (!leaderboard.length && Object.keys(assessment.players || {}).length) {
       leaderboard = Object.values(assessment.players || {})
         .filter((player) => player.submitted)
@@ -5045,12 +4321,22 @@ app.get('/api/assessments/:assessmentId/leaderboard', async (req, res) => {
     const doc = await docRef.get();
     if (!doc.exists) return res.status(404).json({ error: 'Assessment not found.' });
 
-    let leaderboard = await getLeaderboard(assessmentId);
+    const leaderboard = await getLeaderboard(assessmentId);
     const data = doc.data() || {};
 
     if (data.assessmentMode === 'battle') {
-      const finalization = await finalizeBattleCompletionIfReady(docRef, assessmentId, data);
-      leaderboard = finalization.leaderboard || leaderboard;
+      const players = { ...(data.players || {}) };
+      leaderboard.forEach((player) => {
+        if (players[player.userId]) {
+          players[player.userId] = {
+            ...players[player.userId],
+            rank: player.rank,
+            remarks: player.remarks,
+            achievement: player.achievement
+          };
+        }
+      });
+      await docRef.set({ leaderboard, players, updatedAt: nowISO() }, { merge: true });
     }
 
     return res.json({ ok: true, leaderboard });
@@ -5167,133 +4453,70 @@ function escapeSvgText(value = '') {
 function makeAiSlideSvgDataUri(slide = {}, index = 0) {
   const source = `${slide.title || ''} ${slide.imagePrompt || ''} ${(slide.points || []).join(' ')}`.toLowerCase();
   const has = (words = []) => words.some((word) => source.includes(word));
-  const cleanTitle = escapeSvgText(String(slide.title || `Slide ${index + 1}`).replace(/[^a-zA-Z0-9+.#\s-]/g, ' ').replace(/\s+/g, ' ').trim() || `Slide ${index + 1}`);
 
   let palette = ['0F172A', '2563EB', '38BDF8', 'E0F2FE'];
   let visual = '';
-  let label1 = 'KEY IDEA';
-  let label2 = 'PROCESS';
-  let label3 = 'RESULT';
 
-  if (has(['for loop', 'for-loop', 'while loop', 'loops', 'looping', 'iteration', 'iterate', 'iterative', 'programming', 'coding', 'code', 'javascript', 'python', 'java', 'c++', 'algorithm', 'array', 'arrays', 'variable', 'control flow', 'compiler'])) {
-    palette = ['020617', '0EA5E9', 'A855F7', 'E0F2FE'];
-    label1 = 'START';
-    label2 = 'LOOP';
-    label3 = 'REPEAT';
+  if (has(['food', 'nutrition', 'diet', 'meal', 'vegetable', 'fitness', 'health'])) {
+    palette = ['0B3B2E', '22C55E', 'A7F3D0', 'ECFDF5'];
     visual = `
-      <rect x="725" y="158" width="410" height="315" rx="34" fill="#E0F2FE" opacity="0.98"/>
-      <rect x="775" y="205" width="310" height="170" rx="22" fill="#0F172A"/>
-      <rect x="808" y="240" width="86" height="36" rx="18" fill="#22D3EE" opacity="0.96"/>
-      <rect x="918" y="240" width="132" height="36" rx="18" fill="#A855F7" opacity="0.96"/>
-      <rect x="842" y="304" width="168" height="38" rx="19" fill="#34D399" opacity="0.96"/>
-      <path d="M815 402 C895 470 1036 434 1048 336" fill="none" stroke="#38BDF8" stroke-width="17" stroke-linecap="round"/>
-      <path d="M1039 334 L1072 356 L1028 378" fill="none" stroke="#38BDF8" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
-      <rect x="845" y="392" width="176" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+      <ellipse cx="905" cy="360" rx="170" ry="122" fill="#ffffff" opacity="0.94"/>
+      <ellipse cx="905" cy="360" rx="128" ry="88" fill="#DCFCE7"/>
+      <circle cx="850" cy="340" r="28" fill="#F97316"/>
+      <circle cx="895" cy="302" r="23" fill="#FACC15"/>
+      <circle cx="960" cy="336" r="25" fill="#16A34A"/>
+      <circle cx="928" cy="388" r="25" fill="#EF4444"/>
+      <path d="M822 408 C875 384 932 410 1002 374" fill="none" stroke="#166534" stroke-width="18" stroke-linecap="round" opacity="0.95"/>
     `;
-  } else if (has(['database', 'sql', 'server', 'data structure', 'data structures', 'data analytics', 'machine learning', 'artificial intelligence', 'ai', 'technology', 'software', 'computer', 'system'])) {
-    palette = ['020617', '0EA5E9', 'A855F7', 'E0F2FE'];
-    label1 = 'DATA';
-    label2 = 'SYSTEM';
-    label3 = 'INSIGHT';
-    visual = `
-      <rect x="735" y="170" width="395" height="292" rx="34" fill="#E0F2FE" opacity="0.97"/>
-      <circle cx="930" cy="260" r="68" fill="#0F172A"/>
-      <circle cx="930" cy="260" r="31" fill="#38BDF8"/>
-      <circle cx="810" cy="378" r="32" fill="#A855F7"/>
-      <circle cx="1052" cy="378" r="32" fill="#22C55E"/>
-      <path d="M884 303 L830 356 M976 303 L1032 356" fill="none" stroke="#0F172A" stroke-width="12" stroke-linecap="round" opacity="0.85"/>
-      <rect x="845" y="405" width="170" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
-    `;
-  } else if (has(['mobile', 'phone', 'smartphone', 'android', 'iphone', 'app', 'camera', 'device'])) {
-    palette = ['0F172A', '06B6D4', '6366F1', 'ECFEFF'];
-    label1 = 'MOBILE';
-    label2 = 'APP';
-    label3 = 'DEVICE';
-    visual = `
-      <rect x="835" y="154" width="190" height="332" rx="34" fill="#E0F2FE" opacity="0.98"/>
-      <rect x="864" y="198" width="132" height="232" rx="20" fill="#0F172A"/>
-      <circle cx="930" cy="455" r="13" fill="#94A3B8"/>
-      <circle cx="930" cy="315" r="58" fill="#06B6D4" opacity="0.86"/>
-      <rect x="798" y="505" width="265" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
-    `;
-  } else if (has(['study', 'education', 'student', 'learning', 'book', 'books', 'lecture', 'class', 'school', 'college', 'exam', 'notes'])) {
-    palette = ['0B1120', '7C3AED', '38BDF8', 'E0E7FF'];
-    label1 = 'LEARN';
-    label2 = 'PRACTICE';
-    label3 = 'REVISE';
-    visual = `
-      <rect x="740" y="188" width="390" height="245" rx="34" fill="#F8FAFC" opacity="0.97"/>
-      <rect x="795" y="240" width="116" height="142" rx="16" fill="#C4B5FD"/>
-      <rect x="948" y="240" width="116" height="142" rx="16" fill="#7DD3FC"/>
-      <rect x="924" y="240" width="18" height="142" rx="9" fill="#E2E8F0"/>
-      <circle cx="930" cy="188" r="34" fill="#F59E0B"/>
-      <rect x="815" y="455" width="230" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
-    `;
-  } else if (has(['budget', 'expense', 'money', 'cost', 'price', 'finance', 'business', 'income', 'saving', 'savings'])) {
+  } else if (has(['budget', 'expense', 'money', 'cost', 'price', 'finance', 'sales'])) {
     palette = ['111827', '8B5CF6', '22D3EE', 'EDE9FE'];
-    label1 = 'PLAN';
-    label2 = 'SAVE';
-    label3 = 'GROW';
     visual = `
-      <rect x="748" y="184" width="374" height="260" rx="34" fill="#ffffff" opacity="0.96"/>
-      <rect x="802" y="338" width="42" height="58" rx="12" fill="#A78BFA"/>
-      <rect x="878" y="298" width="42" height="98" rx="12" fill="#22D3EE"/>
-      <rect x="954" y="250" width="42" height="146" rx="12" fill="#34D399"/>
-      <path d="M804 280 C858 238 914 236 982 204" fill="none" stroke="#8B5CF6" stroke-width="13" stroke-linecap="round"/>
-      <rect x="835" y="464" width="200" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+      <rect x="780" y="240" width="230" height="178" rx="30" fill="#ffffff" opacity="0.93"/>
+      <rect x="818" y="350" width="34" height="42" rx="10" fill="#A78BFA"/>
+      <rect x="872" y="318" width="34" height="74" rx="10" fill="#22D3EE"/>
+      <rect x="926" y="280" width="34" height="112" rx="10" fill="#34D399"/>
+      <path d="M820 280 C860 242 900 240 946 216" fill="none" stroke="#8B5CF6" stroke-width="12" stroke-linecap="round"/>
+      <circle cx="948" cy="216" r="13" fill="#8B5CF6"/>
     `;
-  } else if (has(['travel', 'city', 'bangalore', 'journey', 'location', 'map', 'route'])) {
+  } else if (has(['education', 'study', 'student', 'learning', 'lecture', 'class', 'school'])) {
+    palette = ['0B1120', '7C3AED', '38BDF8', 'E0E7FF'];
+    visual = `
+      <rect x="775" y="245" width="240" height="162" rx="28" fill="#F8FAFC" opacity="0.95"/>
+      <rect x="812" y="278" width="78" height="98" rx="10" fill="#C4B5FD"/>
+      <rect x="904" y="278" width="78" height="98" rx="10" fill="#7DD3FC"/>
+      <rect x="891" y="278" width="14" height="98" rx="7" fill="#E2E8F0"/>
+      <circle cx="950" cy="224" r="31" fill="#F59E0B"/>
+      <rect x="943" y="184" width="15" height="34" rx="7" fill="#FDE68A"/>
+    `;
+  } else if (has(['travel', 'city', 'bangalore', 'journey', 'location', 'welcome', 'month'])) {
     palette = ['0F172A', '06B6D4', 'F472B6', 'ECFEFF'];
-    label1 = 'TRAVEL';
-    label2 = 'ROUTE';
-    label3 = 'PLACE';
     visual = `
-      <rect x="748" y="196" width="374" height="226" rx="34" fill="#ffffff" opacity="0.96"/>
-      <path d="M800 362 C858 298 913 352 970 292 C1002 258 1030 246 1080 232" fill="none" stroke="#06B6D4" stroke-width="18" stroke-linecap="round"/>
-      <circle cx="800" cy="362" r="19" fill="#F472B6"/>
-      <circle cx="1080" cy="232" r="19" fill="#22C55E"/>
-      <rect x="840" y="452" width="190" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+      <rect x="780" y="250" width="236" height="154" rx="28" fill="#ffffff" opacity="0.94"/>
+      <path d="M816 366 C860 302 902 352 950 292 C972 268 986 252 1008 246" fill="none" stroke="#06B6D4" stroke-width="16" stroke-linecap="round"/>
+      <circle cx="816" cy="366" r="17" fill="#F472B6"/>
+      <circle cx="1008" cy="246" r="17" fill="#22C55E"/>
+      <circle cx="902" cy="320" r="13" fill="#F59E0B"/>
     `;
-  } else if (has(['fitness', 'gym', 'workout', 'exercise', 'health'])) {
-    palette = ['0B3B2E', '22C55E', '06B6D4', 'ECFDF5'];
-    label1 = 'FITNESS';
-    label2 = 'ENERGY';
-    label3 = 'HEALTH';
+  } else if (has(['technology', 'ai', 'data', 'software', 'computer', 'system', 'coding', 'sql'])) {
+    palette = ['020617', '0EA5E9', 'A855F7', 'E0F2FE'];
     visual = `
-      <rect x="748" y="200" width="374" height="215" rx="34" fill="#ffffff" opacity="0.96"/>
-      <rect x="822" y="296" width="210" height="24" rx="12" fill="#0F172A"/>
-      <circle cx="792" cy="308" r="34" fill="#22C55E"/>
-      <circle cx="1062" cy="308" r="34" fill="#06B6D4"/>
-      <rect x="842" y="445" width="186" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
-    `;
-  } else if (has(['recipe', 'cooking', 'cook', 'food', 'meal', 'nutrition', 'diet', 'protein', 'vegetable', 'calorie', 'chicken', 'egg', 'rice', 'spice'])) {
-    palette = ['0B3B2E', '22C55E', 'F97316', 'ECFDF5'];
-    label1 = 'FOOD';
-    label2 = 'NUTRITION';
-    label3 = 'HEALTH';
-    visual = `
-      <ellipse cx="930" cy="322" rx="172" ry="124" fill="#ffffff" opacity="0.96"/>
-      <ellipse cx="930" cy="322" rx="125" ry="86" fill="#DCFCE7"/>
-      <circle cx="875" cy="300" r="28" fill="#F97316"/>
-      <circle cx="925" cy="268" r="23" fill="#FACC15"/>
-      <circle cx="990" cy="305" r="25" fill="#16A34A"/>
-      <circle cx="950" cy="362" r="25" fill="#EF4444"/>
-      <rect x="826" y="472" width="208" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+      <rect x="780" y="248" width="235" height="158" rx="28" fill="#E0F2FE" opacity="0.94"/>
+      <rect x="820" y="282" width="156" height="88" rx="16" fill="#0F172A"/>
+      <circle cx="852" cy="326" r="12" fill="#22D3EE"/>
+      <circle cx="898" cy="326" r="12" fill="#A855F7"/>
+      <circle cx="944" cy="326" r="12" fill="#22C55E"/>
+      <path d="M852 326 L778 252 M898 326 L920 226 M944 326 L1012 270" fill="none" stroke="#38BDF8" stroke-width="10" stroke-linecap="round" opacity="0.85"/>
     `;
   } else {
     palette = ['0F172A', 'EC4899', '22C55E', 'FDF2F8'];
     visual = `
-      <circle cx="930" cy="304" r="112" fill="#ffffff" opacity="0.92"/>
-      <circle cx="878" cy="288" r="34" fill="#EC4899" opacity="0.92"/>
-      <circle cx="972" cy="274" r="29" fill="#22C55E" opacity="0.92"/>
-      <circle cx="954" cy="354" r="41" fill="#38BDF8" opacity="0.92"/>
-      <rect x="820" y="466" width="220" height="44" rx="22" fill="#FFFFFF" opacity="0.94"/>
+      <circle cx="890" cy="314" r="104" fill="#ffffff" opacity="0.9"/>
+      <circle cx="846" cy="300" r="31" fill="#EC4899" opacity="0.9"/>
+      <circle cx="932" cy="286" r="25" fill="#22C55E" opacity="0.9"/>
+      <circle cx="916" cy="356" r="37" fill="#38BDF8" opacity="0.9"/>
+      <path d="M820 388 C876 336 940 354 982 312" fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round" opacity="0.55"/>
     `;
   }
-
-  const safeLabel1 = escapeSvgText(label1);
-  const safeLabel2 = escapeSvgText(label2);
-  const safeLabel3 = escapeSvgText(label3);
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
     <defs>
@@ -5303,34 +4526,18 @@ function makeAiSlideSvgDataUri(slide = {}, index = 0) {
         <stop offset="100%" stop-color="#${palette[2]}"/>
       </linearGradient>
       <radialGradient id="glow" cx="50%" cy="50%" r="60%">
-        <stop offset="0%" stop-color="#ffffff" stop-opacity="0.46"/>
+        <stop offset="0%" stop-color="#ffffff" stop-opacity="0.50"/>
         <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
       </radialGradient>
-      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-        <feDropShadow dx="0" dy="18" stdDeviation="16" flood-color="#020617" flood-opacity="0.28"/>
-      </filter>
     </defs>
     <rect width="1280" height="720" fill="url(#bg)"/>
-    <circle cx="155" cy="130" r="190" fill="url(#glow)"/>
-    <circle cx="1135" cy="625" r="230" fill="url(#glow)" opacity="0.62"/>
-    <rect x="72" y="78" width="1136" height="565" rx="48" fill="#0B1220" opacity="0.16"/>
-    <path d="M120 510 C255 418 338 548 486 428 C622 318 742 442 895 326 C984 258 1048 244 1160 210" fill="none" stroke="#ffffff" stroke-width="18" opacity="0.17" stroke-linecap="round"/>
-    <g filter="url(#shadow)">
-      <rect x="110" y="118" width="520" height="90" rx="28" fill="#ffffff" opacity="0.95"/>
-      <text x="145" y="174" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="800" fill="#0F172A">${cleanTitle}</text>
-      <rect x="132" y="262" width="145" height="56" rx="28" fill="#ffffff" opacity="0.92"/>
-      <text x="165" y="299" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#0F172A">${safeLabel1}</text>
-      <rect x="310" y="334" width="180" height="56" rx="28" fill="#ffffff" opacity="0.92"/>
-      <text x="344" y="371" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#0F172A">${safeLabel2}</text>
-      <rect x="165" y="438" width="172" height="56" rx="28" fill="#ffffff" opacity="0.92"/>
-      <text x="199" y="475" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#0F172A">${safeLabel3}</text>
-      <path d="M275 290 C346 290 350 356 310 362" fill="none" stroke="#ffffff" stroke-width="10" opacity="0.62" stroke-linecap="round"/>
-      <path d="M490 362 C540 390 505 470 337 466" fill="none" stroke="#ffffff" stroke-width="10" opacity="0.62" stroke-linecap="round"/>
-      <g>${visual}</g>
-      <text x="872" y="424" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0F172A" text-anchor="middle">${safeLabel1}</text>
-      <text x="930" y="424" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0F172A" text-anchor="middle">${safeLabel2}</text>
-      <text x="988" y="424" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0F172A" text-anchor="middle">${safeLabel3}</text>
-    </g>
+    <circle cx="170" cy="130" r="180" fill="url(#glow)"/>
+    <circle cx="1140" cy="620" r="220" fill="url(#glow)" opacity="0.6"/>
+    <rect x="82" y="86" width="1116" height="548" rx="42" fill="#0B1220" opacity="0.14"/>
+    <path d="M120 502 C255 418 330 544 470 430 C610 316 730 440 875 332 C965 265 1045 250 1160 210" fill="none" stroke="#ffffff" stroke-width="18" opacity="0.16" stroke-linecap="round"/>
+    <circle cx="290" cy="285" r="122" fill="#ffffff" opacity="0.12"/>
+    <circle cx="392" cy="390" r="74" fill="#ffffff" opacity="0.10"/>
+    <g>${visual}</g>
   </svg>`;
 
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
@@ -5342,81 +4549,54 @@ function getPptImageApiKey() {
 }
 
 function buildPptImagePromptForSlides(slides = [], pairNumber = 1) {
-  const joined = slides.map((slide) => {
-    const title = slide?.title || '';
-    const imagePrompt = slide?.imagePrompt || '';
-    const points = Array.isArray(slide?.points) ? slide.points.join(' ') : '';
-    return `${title} ${imagePrompt} ${points}`;
-  }).join(' ');
+  const raw = `${slides.map((slide) => slide?.title || '').join(' ')} ${slides
+    .flatMap((slide) => Array.isArray(slide?.points) ? slide.points : [])
+    .join(' ')}`.toLowerCase();
 
-  const raw = joined.toLowerCase();
   const has = (words = []) => words.some((word) => raw.includes(word));
 
-  const topicText = joined
-    .replace(/[^a-zA-Z0-9+.#\s-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 420);
+  let scene = 'a realistic professional presentation background showing a clean learning workspace with a laptop, simple objects, soft natural light, modern desk, shallow depth of field';
 
-  let scene = `a realistic professional presentation image that visually represents this exact learning topic: ${topicText}. Use symbolic objects connected to the topic, clean modern composition, no text anywhere`;
-  let strictAvoid = 'random food, meals, plates, vegetables, restaurant items, unrelated objects';
-
-  if (has(['for loop', 'for-loop', 'loops', 'looping', 'iteration', 'iterate', 'iterative', 'programming', 'coding', 'code', 'javascript', 'python', 'java', 'c++', 'algorithm', 'array', 'arrays', 'variable', 'control flow', 'compiler'])) {
-    scene = 'a realistic technology learning scene for programming loops: laptop with a completely blank abstract blue screen, glowing circular loop arrows, small connected blocks, keyboard, notebook with blank pages, modern coding classroom desk, no code text and no letters';
-    strictAvoid = 'food, meals, vegetables, fruits, plates, restaurant items, people eating, unrelated lifestyle objects';
-  } else if (has(['database', 'sql', 'server', 'data structure', 'data structures', 'data analytics', 'machine learning', 'artificial intelligence', 'ai'])) {
-    scene = 'a realistic technology education scene with server lights, laptop with blank abstract data visualization shapes, connected nodes, clean desk, blue neon lighting, no readable text';
-    strictAvoid = 'food, meals, vegetables, fruits, plates, restaurant items, unrelated household objects';
+  if (has(['chicken', 'egg', 'spice', 'spices', 'turmeric', 'cumin', 'chilli', 'chili', 'food', 'meal', 'rice', 'nutrition', 'diet', 'protein', 'vegetable', 'calorie'])) {
+    scene = 'a realistic overhead food photography scene with cooked chicken, boiled eggs, rice, vegetables, and small bowls of colorful spices on a clean dark table, appetizing restaurant style, natural light, no packaging';
   } else if (has(['mobile', 'phone', 'smartphone', 'android', 'iphone', 'app', 'camera', 'device'])) {
-    scene = 'a realistic modern smartphone on a clean desk with a blank dark screen, wireless earbuds and soft technology lighting, premium product photography style, no screen text';
-    strictAvoid = 'food, meals, vegetables, restaurant items, random books unrelated to mobile technology';
+    scene = 'a realistic modern smartphone on a clean desk with a blank dark screen, wireless earbuds and soft technology lighting, premium product photography style';
   } else if (has(['study', 'education', 'student', 'learning', 'book', 'books', 'lecture', 'class', 'school', 'college', 'exam', 'notes'])) {
-    scene = 'a realistic study desk with closed books, laptop with a blank screen, pencils, coffee cup, warm lamp light, neat student workspace, no visible writing';
-    strictAvoid = 'food plates, restaurant items, unrelated cooking items';
+    scene = 'a realistic study desk with closed books, a laptop with a blank screen, pencils, coffee cup, warm lamp light, neat student workspace, no visible writing';
   } else if (has(['budget', 'expense', 'money', 'cost', 'price', 'finance', 'business', 'income', 'saving', 'savings'])) {
-    scene = 'a realistic finance planning scene with coins, piggy bank, wallet, calculator with blank display, and clean desk objects, professional business lighting, no paper text and no numbers';
-    strictAvoid = 'food, meals, vegetables, restaurant items, unrelated study objects';
+    scene = 'a realistic finance planning scene with coins, piggy bank, wallet, and clean desk objects, professional business lighting, no paper text, no numbers';
+  } else if (has(['technology', 'ai', 'data', 'software', 'computer', 'coding', 'sql', 'database', 'server', 'cyber'])) {
+    scene = 'a realistic technology scene with laptop showing a blank abstract blue screen, server lights, soft neon lighting, modern workspace, no code text';
   } else if (has(['travel', 'city', 'bangalore', 'journey', 'location', 'map', 'route'])) {
-    scene = 'a realistic city travel scene with backpack, sunglasses, and a blurred city background, cinematic natural light, no map text and no signs';
-    strictAvoid = 'food plates, restaurant menus, random cooking items';
+    scene = 'a realistic city travel scene with backpack, coffee cup, sunglasses, and a blurred city background, cinematic natural light, no map text';
   } else if (has(['fitness', 'gym', 'workout', 'exercise', 'health'])) {
-    scene = 'a realistic fitness scene with gym equipment, water bottle, towel, bright natural light, no written text';
-    strictAvoid = 'restaurant meals, random plates, unrelated food closeups';
-  } else if (has(['recipe', 'cooking', 'cook', 'food', 'meal', 'nutrition', 'diet', 'protein', 'vegetable', 'calorie', 'chicken', 'egg', 'rice', 'spice'])) {
-    scene = 'a realistic food or nutrition learning scene directly related to the slide topic, clean table setup, natural light, no packaging and no readable text';
-    strictAvoid = 'unrelated technology objects, unrelated city travel objects';
+    scene = 'a realistic fitness scene with gym equipment, water bottle, towel, and healthy meal bowl nearby, bright natural light, no written text';
   }
 
-  return `Generate one realistic high-quality 16:9 PowerPoint image.
-
-Exact slide topic:
-${topicText || 'learning presentation topic'}
+  return `Generate a realistic high-quality 16:9 photo for a PowerPoint slide.
 
 Scene to create:
 ${scene}
 
-Strict relevance rules:
-- The image must match the exact slide topic above.
-- Do not create random food or lifestyle images unless the topic is clearly food, cooking, diet, or nutrition.
-- If the topic is programming, loops, algorithms, data, software, or computer science, show technology/learning visuals only.
-- Use objects and scenery only; no educational poster, no infographic, no chart.
-
 Image style:
-- realistic photography
+- realistic photography, not illustration
 - professional presentation image
 - clean composition
 - cinematic natural lighting
 - high detail
+- no poster design
+- no infographic design
 
-Critical text rule:
+Critical rule:
 The image must contain absolutely zero readable or unreadable text.
 
 Do NOT include:
-- ${strictAvoid}
 - words, letters, numbers, symbols, captions, headings, labels, menus, signs
 - text on paper, books, notebooks, worksheets, receipts, menus, packaging, boards, screens, phones, laptops, clothes, walls, or any object
 - logos, brand names, watermarks
-- bullet points or chart text`;
+- bullet points or chart text
+
+Only show real objects and scenery.`;
 }
 
 async function generateStabilityPptImageDataUri(promptText = '') {
@@ -5429,7 +4609,7 @@ async function generateStabilityPptImageDataUri(promptText = '') {
 
   const formData = new FormData();
   formData.append('prompt', String(promptText || '').slice(0, 1800));
-  formData.append('negative_prompt', 'unrelated food, random meal, plate of food, vegetables when topic is not food, restaurant scene when topic is not food, text, words, letters, numbers, digits, symbols, typography, caption, captions, subtitle, subtitles, label, labels, sign, signage, handwriting, printed text, menu, receipt, paper writing, notebook writing, book text, board writing, screen text, phone screen text, laptop screen text, package label, brand name, logo, watermark, poster, infographic, bullet points, chart labels, fake language, gibberish text, unreadable text, random characters, blurry, low quality, distorted');
+  formData.append('negative_prompt', 'text, words, letters, numbers, digits, symbols, typography, caption, captions, subtitle, subtitles, label, labels, sign, signage, handwriting, printed text, menu, receipt, paper writing, notebook writing, book text, board writing, screen text, phone screen text, laptop screen text, package label, brand name, logo, watermark, poster, infographic, bullet points, chart labels, fake language, gibberish text, unreadable text, random characters, blurry, low quality, distorted');
   formData.append('aspect_ratio', '16:9');
   formData.append('output_format', 'png');
 
@@ -5490,7 +4670,7 @@ function normalizePptPlan(plan = {}) {
           ? slide.points.slice(0, 7).map((point) => String(point || '').slice(0, 220)).filter(Boolean)
           : [],
         speakerNote: String(slide.speakerNote || '').slice(0, 900),
-        imagePrompt: String(slide.imagePrompt || `AI learning visual for slide ${index + 1}`).slice(0, 520),
+        imagePrompt: String(slide.imagePrompt || `AI learning visual for slide ${index + 1}`).slice(0, 180),
         imageUrl: String(slide.imageUrl || '').trim(),
         aiImageData: String(slide.aiImageData || '').trim(),
         imageMode: String(slide.imageMode || 'ai').trim(),
@@ -5553,7 +4733,7 @@ Return ONLY JSON in this format:
         "Detailed bullet point 4"
       ],
       "speakerNote": "Short explanation for presenting this slide",
-      "imagePrompt": "Very specific visual idea directly matching this slide topic. For programming topics, mention laptop, loop arrows, flow blocks, or abstract technology visuals. Never suggest food unless the slide is about food."
+      "imagePrompt": "Suggested image idea for this slide"
     }
   ]
 }
@@ -5568,9 +4748,6 @@ Important rules:
 - Do not use markdown.
 - Do not include timestamps unless they are important. Never repeat the same timestamp twice in one sentence.
 - Make the PPT useful even if the summary is short.
-- Every imagePrompt must be directly related to the slide title and points.
-- For programming, coding, algorithms, loops, data, or computer science topics, imagePrompt must clearly request technology/learning visuals, not food or lifestyle objects.
-- Never suggest food images unless the actual summary is about food, cooking, diet, or nutrition.
 
 Presentation topic/title hint:
 ${String(title || '').slice(0, 200)}
@@ -5664,12 +4841,9 @@ app.post('/api/ppt/images/generate', async (req, res) => {
       if (!group.length) continue;
 
       const prompt = buildPptImagePromptForSlides(group, Math.floor(i / everyN) + 1);
-      const useSafeEnglishImages = String(process.env.PPT_SAFE_ENGLISH_IMAGES || 'true').toLowerCase() !== 'false';
 
       try {
-        const imageDataUri = useSafeEnglishImages
-          ? makeAiSlideSvgDataUri(group[0], i)
-          : await generateStabilityPptImageDataUri(prompt);
+        const imageDataUri = await generateStabilityPptImageDataUri(prompt);
         generatedCount += 1;
 
         for (let offset = 0; offset < group.length; offset++) {
@@ -5679,9 +4853,7 @@ app.post('/api/ppt/images/generate', async (req, res) => {
             imageMode: 'ai',
             aiImageData: imageDataUri,
             imageUrl: '',
-            imagePrompt: useSafeEnglishImages
-              ? 'Safe English visual generated locally. Text is rendered by Brief Bot, not AI image text.'
-              : prompt
+            imagePrompt: prompt
           };
         }
       } catch (imageError) {
@@ -5799,46 +4971,29 @@ function getPptFontStyleMetaBackend(style = 'modern') {
   return map[style] || map.modern;
 }
 
-async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Presentation', subtitle = '', actionType = 'exported', slideCount = 0, template = 'floral', fileName = '', pptPlan = null } = {}) {
+async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Presentation', actionType = 'exported', slideCount = 0, template = 'floral' } = {}) {
   try {
     const cleanUserId = String(userId || '').trim();
-    if (!cleanUserId) return null;
-
-    const finalTitle = String(title || pptPlan?.title || 'Brief Bot Presentation').slice(0, 160);
-    const finalSubtitle = String(subtitle || pptPlan?.subtitle || '').slice(0, 220);
-    const finalSlideCount = Number(slideCount || pptPlan?.slides?.length || 0);
-    const finalTemplate = String(template || 'floral').slice(0, 40);
-    const finalActionType = String(actionType || 'exported').slice(0, 40);
-    const createdAt = nowISO();
+    if (!cleanUserId || !db) {
+      return null;
+    }
 
     const record = {
       userId: cleanUserId,
-      title: finalTitle,
-      subtitle: finalSubtitle,
-      actionType: finalActionType,
-      slideCount: finalSlideCount,
-      template: finalTemplate,
-      fileName: String(fileName || `${finalTitle.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'briefbot-presentation'}.pptx`).slice(0, 180),
-      savedAt: createdAt,
-      createdAt,
-      updatedAt: createdAt
+      title: String(title || 'Brief Bot Presentation').slice(0, 160),
+      actionType: String(actionType || 'exported').slice(0, 40),
+      slideCount: Number(slideCount || 0),
+      template: String(template || 'floral').slice(0, 40),
+      createdAt: new Date().toISOString()
     };
 
-    const userPptRef = usersCollection.doc(cleanUserId).collection('savedPpts').doc();
-    await userPptRef.set(record);
+    const collectionRef = db.collection('pptHistory');
+    const docRef = await collectionRef.add(record);
 
-    await firestoreDb.collection('pptHistory').doc(userPptRef.id).set({
-      ...record,
-      pptId: userPptRef.id
-    }, { merge: true });
-
-    const userDoc = await usersCollection.doc(cleanUserId).get();
-    if (userDoc.exists) {
-      const currentCount = Number(userDoc.data()?.pptsGenerated || 0);
-      await usersCollection.doc(cleanUserId).set({ pptsGenerated: currentCount + 1, updatedAt: createdAt }, { merge: true });
-    }
-
-    return safePptItem({ id: userPptRef.id, data: () => record });
+    return {
+      id: docRef.id,
+      ...record
+    };
   } catch (error) {
     console.error('[PPT Firebase Save Skipped]', error.message);
     return null;
@@ -6062,9 +5217,6 @@ app.post('/api/ppt/export', async (req, res) => {
     if (userId && saveRecord) {
       await savePptRecordToFirebase({
         userId,
-        title: plan.title,
-        subtitle: plan.subtitle,
-        slideCount: plan.slides.length,
         pptPlan: plan,
         template,
         fileName: `${safeFileName}.pptx`,
@@ -6092,68 +5244,14 @@ app.get('/api/ppt/recent/:userId', async (req, res) => {
     const userDoc = await usersCollection.doc(cleanUserId).get();
     if (!userDoc.exists) return res.status(404).json({ error: 'User not found.' });
 
-    const byId = new Map();
-    const addPpt = (item) => {
-      const safe = safePptItem(item);
-      const key = safe.id || `${safe.title}-${safe.createdAt}`;
-      if (key && !byId.has(key)) byId.set(key, safe);
-    };
+    const snapshot = await usersCollection
+      .doc(cleanUserId)
+      .collection('savedPpts')
+      .orderBy('createdAt', 'desc')
+      .limit(12)
+      .get();
 
-    try {
-      const snapshot = await usersCollection
-        .doc(cleanUserId)
-        .collection('savedPpts')
-        .orderBy('createdAt', 'desc')
-        .limit(20)
-        .get();
-      snapshot.docs.forEach(addPpt);
-    } catch (savedError) {
-      console.error('[Recent PPTs savedPpts Warning]', savedError.message);
-    }
-
-    try {
-      const historySnapshot = await firestoreDb
-        .collection('pptHistory')
-        .where('userId', '==', cleanUserId)
-        .limit(20)
-        .get();
-      historySnapshot.docs.forEach(addPpt);
-    } catch (historyError) {
-      console.error('[Recent PPTs pptHistory Warning]', historyError.message);
-    }
-
-    if (byId.size === 0) {
-      try {
-        const activitySnapshot = await activitiesCollection
-          .where('userId', '==', cleanUserId)
-          .where('type', 'in', ['ppt_exported', 'ppt_saved', 'ppt_plan_generated'])
-          .limit(30)
-          .get();
-
-        activitySnapshot.docs.forEach((doc) => {
-          const data = doc.data() || {};
-          addPpt({
-            id: doc.id,
-            userId: cleanUserId,
-            title: data.meta?.title || 'Brief Bot PPT',
-            subtitle: data.type === 'ppt_plan_generated' ? 'PPT plan generated' : '',
-            actionType: data.type === 'ppt_saved' ? 'saved' : data.type === 'ppt_exported' ? 'exported' : 'generated',
-            slideCount: Number(data.meta?.slideCount || 0),
-            template: data.meta?.template || 'template',
-            createdAt: data.createdAt || null,
-            updatedAt: data.createdAt || null
-          });
-        });
-      } catch (activityError) {
-        console.error('[Recent PPTs Activity Warning]', activityError.message);
-      }
-    }
-
-    const ppts = Array.from(byId.values())
-      .sort((a, b) => String(b.createdAt || b.savedAt || '').localeCompare(String(a.createdAt || a.savedAt || '')))
-      .slice(0, 12);
-
-    return res.json({ ok: true, ppts });
+    return res.json({ ok: true, ppts: snapshot.docs.map((doc) => safePptItem(doc)) });
   } catch (error) {
     console.error('[Recent PPTs Error]', error);
     return res.status(500).json({ error: error.message });

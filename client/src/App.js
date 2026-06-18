@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { getAuth, sendPasswordResetEmail, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 
 
 const firebaseConfig = {
@@ -261,7 +261,7 @@ function App() {
     }
 
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/history/${user.id}`, {
+      const response = await fetch(`http://localhost:5000/api/history/${user.id}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -284,7 +284,7 @@ function App() {
 
     setRecentPptsLoading(true);
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/ppt/recent/${user.id}`, {
+      const response = await fetch(`http://localhost:5000/api/ppt/recent/${user.id}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -342,70 +342,6 @@ function App() {
       .simple-btn-glow:active {
         transform: translateY(0px) scale(0.98);
         box-shadow: 0 0 10px rgba(0, 242, 254, 0.22) !important;
-      }
-
-      .battle-option-card,
-      .boss-option-card {
-        width: 100% !important;
-        max-width: 100% !important;
-        box-sizing: border-box !important;
-        display: flex !important;
-        flex-wrap: nowrap !important;
-        align-items: flex-start !important;
-        text-align: left !important;
-      }
-
-      .battle-option-card input,
-      .boss-option-card input {
-        flex: 0 0 auto !important;
-        width: 18px !important;
-        min-width: 18px !important;
-        height: 18px !important;
-        margin-top: 3px !important;
-      }
-
-      .battle-option-text,
-      .boss-option-text {
-        flex: 1 1 auto !important;
-        min-width: 0 !important;
-        display: block !important;
-        white-space: normal !important;
-        overflow-wrap: anywhere !important;
-        word-break: break-word !important;
-        line-height: 1.55 !important;
-      }
-
-      @media screen and (max-width: 768px) {
-        .battle-option-card,
-        .boss-option-card {
-          padding: 0.95rem 0.9rem !important;
-          gap: 0.75rem !important;
-          border-radius: 14px !important;
-        }
-
-        .battle-question-card {
-          padding: 0.95rem !important;
-        }
-
-        .battle-question-scroll {
-          max-height: none !important;
-          padding: 0.9rem !important;
-          gap: 0.85rem !important;
-        }
-
-        .battle-leaderboard-row,
-        .boss-leaderboard-row {
-          grid-template-columns: 52px 1fr !important;
-          gap: 0.65rem !important;
-        }
-
-        .battle-leaderboard-row > div:nth-child(3),
-        .battle-leaderboard-row > div:nth-child(4),
-        .boss-leaderboard-row > div:nth-child(3),
-        .boss-leaderboard-row > div:nth-child(4) {
-          grid-column: 2 / -1 !important;
-          text-align: left !important;
-        }
       }
     `;
 
@@ -654,7 +590,7 @@ function App() {
     if (!summaryText || !url || !currentUser?.id || currentUser.role === 'admin') return null;
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/history/save', {
+      const response = await fetch('http://localhost:5000/api/history/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -707,7 +643,7 @@ function App() {
     if (!id || !currentUser?.id) return;
 
     try {
-      await fetch(`https://briefbot-backend-giridhar.onrender.com/api/history/${currentUser.id}/${id}`, {
+      await fetch(`http://localhost:5000/api/history/${currentUser.id}/${id}`, {
         method: 'DELETE'
       });
     } catch (error) {
@@ -724,7 +660,7 @@ function App() {
     }
 
     try {
-      await fetch(`https://briefbot-backend-giridhar.onrender.com/api/history/${currentUser.id}`, {
+      await fetch(`http://localhost:5000/api/history/${currentUser.id}`, {
         method: 'DELETE'
       });
     } catch (error) {
@@ -758,25 +694,6 @@ function App() {
 
   const isValidEmail = (email) => /\S+@\S+\.\S+/.test(String(email || '').trim());
 
-  const formatAuthFriendlyError = (error) => {
-    const rawMessage = String(error?.message || error?.code || 'Google sign in failed.');
-    const lowerMessage = rawMessage.toLowerCase();
-
-    if (lowerMessage.includes('unauthorized-domain') || lowerMessage.includes('unauthorised domain')) {
-      return 'Google login is blocked because this website domain is not added in Firebase Authorized domains. Add briefbot-frontend-giridhar.vercel.app in Firebase Console → Authentication → Settings → Authorized domains.';
-    }
-
-    if (lowerMessage.includes('popup-closed-by-user')) {
-      return 'Google sign in was closed before completion.';
-    }
-
-    if (lowerMessage.includes('popup-blocked')) {
-      return 'Popup was blocked. Allow popups for this site and try Google sign in again.';
-    }
-
-    return rawMessage;
-  };
-
   const finishAuthSuccess = (user) => {
     setCurrentUser(user);
     localStorage.setItem('briefBotCurrentUser', JSON.stringify(user));
@@ -796,12 +713,11 @@ function App() {
       provider.setCustomParameters({ prompt: 'select_account' });
       const result = await signInWithPopup(firebaseClientAuth, provider);
       const idToken = await result.user.getIdToken();
-      const authIntent = authMode === 'register' ? 'signup' : 'signin';
 
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/social-login', {
+      const response = await fetch('http://localhost:5000/api/social-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idToken, roleMode, authIntent })
+        body: JSON.stringify({ idToken, roleMode })
       });
 
       const text = await response.text();
@@ -812,21 +728,10 @@ function App() {
         throw new Error('Social login backend returned invalid response. Restart backend and try again.');
       }
 
-      if (!response.ok) {
-        if (data?.requiresSignup) {
-          setAuthMode('register');
-        }
-        try {
-          await signOut(firebaseClientAuth);
-        } catch (signOutError) {
-          console.log('Google sign out after blocked login skipped:', signOutError.message);
-        }
-        throw new Error(data.error || 'Google sign in failed.');
-      }
-
+      if (!response.ok) throw new Error(data.error || 'Google sign in failed.');
       finishAuthSuccess(data.user);
     } catch (error) {
-      setAuthError(formatAuthFriendlyError(error));
+      setAuthError(error.message || 'Google sign in failed.');
     } finally {
       setAuthLoading(false);
     }
@@ -856,7 +761,7 @@ function App() {
           ? '/api/admin/login'
           : '/api/login';
 
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com${endpoint}`, {
+      const response = await fetch(`http://localhost:5000${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -927,7 +832,7 @@ function App() {
       console.log('[Client Password Reset Error]', clientError?.code || clientError?.message);
 
       try {
-        const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/password-reset', {
+        const response = await fetch('http://localhost:5000/api/password-reset', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email: cleanEmail })
@@ -997,7 +902,7 @@ function App() {
     setProfileMessage('');
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/change-password', {
+      const response = await fetch('http://localhost:5000/api/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1037,7 +942,7 @@ function App() {
     setProfileMessage('');
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/profile/update', {
+      const response = await fetch('http://localhost:5000/api/profile/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1108,7 +1013,7 @@ function App() {
     setProfileMessage('');
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/account/delete', {
+      const response = await fetch('http://localhost:5000/api/account/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: currentUser.id })
@@ -1141,7 +1046,7 @@ function App() {
 
     if (currentUser?.id) {
       try {
-        await fetch('https://briefbot-backend-giridhar.onrender.com/api/logout', {
+        await fetch('http://localhost:5000/api/logout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: currentUser.id })
@@ -1161,7 +1066,7 @@ function App() {
     if (!currentUser?.id) return;
 
     try {
-      await fetch('https://briefbot-backend-giridhar.onrender.com/api/user/activity', {
+      await fetch('http://localhost:5000/api/user/activity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1182,7 +1087,7 @@ function App() {
     setAuthError('');
     setAdminActionMessage('');
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/admin/stats?adminId=${currentUser.id}&t=${Date.now()}`, {
+      const response = await fetch(`http://localhost:5000/api/admin/stats?adminId=${currentUser.id}&t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -1209,7 +1114,7 @@ function App() {
     setSelectedAdminUserId(userId);
 
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/admin/users/${userId}/progress?adminId=${currentUser.id}`, {
+      const response = await fetch(`http://localhost:5000/api/admin/users/${userId}/progress?adminId=${currentUser.id}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -1244,7 +1149,7 @@ function App() {
     setAdminActionMessage('');
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/admin/users/delete', {
+      const response = await fetch('http://localhost:5000/api/admin/users/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1444,7 +1349,7 @@ function App() {
     if (!assessmentId) return;
     if (!silent) setAssessmentLoading(true);
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentId}?t=${Date.now()}`, {
+      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentId}?t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
       });
       const data = await response.json();
@@ -1482,12 +1387,9 @@ function App() {
       if (isBattleAssessment(data.assessment)) {
         await loadAssessmentLeaderboard(data.assessment.id);
       }
-
-      return data.assessment || null;
     } catch (error) {
       if (!silent) setAssessmentError(error.message);
       console.log('Room refresh skipped:', error.message);
-      return null;
     } finally {
       if (!silent) setAssessmentLoading(false);
     }
@@ -1496,7 +1398,7 @@ function App() {
   const loadAssessmentLeaderboard = async (assessmentId) => {
     if (!assessmentId) return [];
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentId}/leaderboard?t=${Date.now()}`, {
+      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentId}/leaderboard?t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -1522,7 +1424,7 @@ function App() {
     setAssessmentStartedAt(Date.now());
 
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentId}`, {
+      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentId}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -1632,7 +1534,7 @@ function App() {
   const handleExitAssessment = async () => {
     try {
       if (assessmentData?.assessmentMode === 'battle' && assessmentData?.roomCode && currentUser?.id) {
-        await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${assessmentData.roomCode}/quit`, {
+        await fetch(`http://localhost:5000/api/battle-rooms/${assessmentData.roomCode}/quit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: currentUser.id })
@@ -1783,11 +1685,8 @@ function App() {
       ? bossLeaderboard
       : (bossResult?.leaderboard || qualifiers || []);
     const hasBattleContext = Boolean(assessmentData && isBattleAssessment(assessmentData));
-    const battlePlayers = getBattlePlayers();
-    const submittedBattlePlayers = getSubmittedBattlePlayers();
-    const battleAllSubmitted = areAllBattlePlayersSubmitted();
-    const leaderboardReady = battleAllSubmitted && getBossQualifiersClient().length >= 2;
-    const currentUserQualified = battleAllSubmitted && isCurrentUserBossQualified();
+    const leaderboardReady = getBattleLeaderboardList().length >= 2;
+    const currentUserQualified = isCurrentUserBossQualified();
     const championUnlocked = isCurrentUserFinalBossChampion();
     const bossFinishedForUser = Boolean(bossResult);
     const waitingForOtherBossPlayers = bossFinishedForUser && !isBossBattleFullyCompleted();
@@ -1863,26 +1762,6 @@ function App() {
               <h3 style={{ color: '#FFF7ED', margin: '0.55rem 0 0 0', fontWeight: '950' }}>Boss Mode unlocks after Battle Room</h3>
               <p style={{ color: '#FED7AA', maxWidth: '680px', margin: '0.55rem auto 0 auto', lineHeight: '1.65' }}>Create or join a Battle Room first. Once players complete the battle and the leaderboard is ready, the top performers can enter this fiery final round.</p>
             </div>
-          ) : !battleAllSubmitted ? (
-            <div style={{ background: 'rgba(15,23,42,0.76)', border: '1px dashed rgba(251,146,60,0.34)', borderRadius: '20px', padding: '1.35rem', display: 'grid', gap: '1rem' }}>
-              <div>
-                <h3 style={{ color: '#FFF7ED', margin: 0, fontWeight: '950' }}>Boss Battle locked until everyone submits</h3>
-                <p style={{ color: '#FED7AA', margin: '0.45rem 0 0 0', lineHeight: '1.65' }}>
-                  Submitted {submittedBattlePlayers.length}/{battlePlayers.length}. The final Top 3 and Boss Arena will open only after all Battle Room players finish their test.
-                </p>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.85rem' }}>
-                {battlePlayers.map((player, index) => (
-                  <div key={player.userId || index} style={{ background: player.submitted ? 'rgba(52,211,153,0.10)' : 'rgba(255,255,255,0.04)', border: player.submitted ? '1px solid rgba(52,211,153,0.28)' : '1px solid rgba(255,255,255,0.08)', borderRadius: '16px', padding: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.7rem' }}>
-                    <div style={{ width: '42px', height: '42px', borderRadius: '14px', background: player.submitted ? 'linear-gradient(135deg, #34D399, #00F2FE)' : 'linear-gradient(135deg, #F97316, #EF4444)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '950', color: '#0B0F19' }}>{player.submitted ? '✅' : '⏳'}</div>
-                    <div>
-                      <div style={{ color: '#FFF7ED', fontWeight: '900' }}>{player.name || player.userName || 'Player'}</div>
-                      <div style={{ color: player.submitted ? '#86EFAC' : '#FECACA', fontSize: '0.82rem' }}>{player.submitted ? 'Submitted' : 'Still writing'}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
           ) : !leaderboardReady ? (
             <div style={{ background: 'rgba(15,23,42,0.76)', border: '1px dashed rgba(251,146,60,0.34)', borderRadius: '20px', padding: '1.35rem', display: 'grid', gap: '1rem' }}>
               <div>
@@ -1940,8 +1819,8 @@ function App() {
           ) : !currentUserQualified && !bossResult ? (
             <div style={{ display: 'grid', gap: '1rem' }}>
               <div style={{ background: 'rgba(15,23,42,0.76)', border: '1px solid rgba(251,191,36,0.22)', borderRadius: '20px', padding: '1.35rem' }}>
-                <h3 style={{ color: '#FCA5A5', margin: 0, fontWeight: '950', fontSize: 'clamp(1.5rem, 4vw, 2.6rem)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Better Luck Next Time</h3>
-                <p style={{ color: '#FED7AA', margin: '0.45rem 0 0 0', lineHeight: '1.65' }}>You submitted the Battle Room, but only the final Top 3 players qualify for Boss Arena. You are not qualified this time. Practice once more and try again in the next Battle Room.</p>
+                <h3 style={{ color: '#FFF7ED', margin: 0, fontWeight: '950' }}>Only the top battle players can enter Boss Challenge</h3>
+                <p style={{ color: '#FED7AA', margin: '0.45rem 0 0 0', lineHeight: '1.65' }}>You can still watch the qualifiers below. Score higher in the next Battle Room to unlock the fire arena.</p>
               </div>
               <div style={{ display: 'grid', gap: '0.8rem' }}>
                 {qualifiers.map((player, index) => (
@@ -2138,9 +2017,9 @@ function App() {
                   <h4 style={{ color: '#FFF7ED', margin: '0 0 0.85rem 0', lineHeight: '1.55', fontSize: '1.08rem' }}>{question.question}</h4>
                   <div style={{ display: 'grid', gap: '0.7rem' }}>
                     {(question.options || []).map((option, optIndex) => (
-                      <label key={optIndex} className="boss-option-card" style={{ display: 'flex', gap: '0.65rem', alignItems: 'flex-start', padding: '0.8rem', borderRadius: '14px', border: bossAnswers[question.id] === option ? '1px solid #F97316' : '1px solid rgba(255,255,255,0.10)', background: bossAnswers[question.id] === option ? 'linear-gradient(135deg, rgba(249,115,22,0.16), rgba(239,68,68,0.12))' : 'rgba(17,24,39,0.72)', color: '#FFF7ED', cursor: 'pointer', width: '100%', boxSizing: 'border-box' }}>
+                      <label key={optIndex} style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', padding: '0.8rem', borderRadius: '14px', border: bossAnswers[question.id] === option ? '1px solid #F97316' : '1px solid rgba(255,255,255,0.10)', background: bossAnswers[question.id] === option ? 'linear-gradient(135deg, rgba(249,115,22,0.16), rgba(239,68,68,0.12))' : 'rgba(17,24,39,0.72)', color: '#FFF7ED', cursor: 'pointer' }}>
                         <input type="radio" checked={bossAnswers[question.id] === option} onChange={() => handleBossAnswerChange(question.id, option)} />
-                        <span className="boss-option-text" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '1.5' }}>{option}</span>
+                        <span style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '1.5' }}>{option}</span>
                       </label>
                     ))}
                   </div>
@@ -2178,7 +2057,7 @@ function App() {
     setAssessmentStartedAt(mode === 'solo' ? Date.now() : null);
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/assessments/create', {
+      const response = await fetch('http://localhost:5000/api/assessments/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2233,7 +2112,7 @@ function App() {
     setAssessmentStartedAt(null);
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/battle-room/join', {
+      const response = await fetch('http://localhost:5000/api/battle-room/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomCode: code, userId: currentUser.id })
@@ -2270,7 +2149,7 @@ function App() {
     setBattleLoading(true);
     setAssessmentError('');
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-room/${assessmentData.id}/start`, {
+      const response = await fetch(`http://localhost:5000/api/battle-room/${assessmentData.id}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: currentUser.id })
@@ -2297,71 +2176,20 @@ function App() {
   };
 
 
-  const getBattleLeaderboardList = (assessment = assessmentData) => {
-    const freshAssessmentLeaderboard = Array.isArray(assessment?.leaderboard) ? assessment.leaderboard : [];
-    const liveLeaderboard = Array.isArray(assessmentLeaderboard) ? assessmentLeaderboard : [];
-    const resultLeaderboard = Array.isArray(assessmentResult?.leaderboard) ? assessmentResult.leaderboard : [];
-
-    return freshAssessmentLeaderboard.length
-      ? freshAssessmentLeaderboard
-      : liveLeaderboard.length
-        ? liveLeaderboard
-        : resultLeaderboard;
+  const getBattleLeaderboardList = () => {
+    return assessmentLeaderboard?.length
+      ? assessmentLeaderboard
+      : (assessmentData?.leaderboard || assessmentResult?.leaderboard || []);
   };
 
-  const getSubmittedBattlePlayers = (assessment = assessmentData) => {
-    const leaderboardUserIds = new Set(getBattleLeaderboardList(assessment).map((player) => String(player.userId || player.id || '')).filter(Boolean));
-    return getBattlePlayers(assessment).filter((player) => {
-      const playerId = String(player.userId || player.id || '');
-      return Boolean(player.submitted) || leaderboardUserIds.has(playerId);
-    });
+  const getBossQualifiersClient = () => {
+    const list = getBattleLeaderboardList();
+    if (!Array.isArray(list) || list.length < 2) return [];
+    return list.slice(0, Math.min(3, list.length));
   };
 
-  const areAllBattlePlayersSubmitted = (assessment = assessmentData) => {
-    if (!assessment || !isBattleAssessment(assessment)) return false;
-    const players = getBattlePlayers(assessment);
-    if (players.length < 2) return false;
-
-    const leaderboardUserIds = getBattleLeaderboardList(assessment).map((player) => String(player.userId || player.id || '')).filter(Boolean);
-    const submittedUserIds = new Set(leaderboardUserIds);
-
-    return players.every((player) => {
-      const playerId = String(player.userId || player.id || '');
-      return Boolean(player.submitted) || submittedUserIds.has(playerId);
-    });
-  };
-
-  const getBossQualifiersClient = (assessment = assessmentData) => {
-    if (!areAllBattlePlayersSubmitted(assessment)) return [];
-
-    const list = getBattleLeaderboardList(assessment);
-    if (Array.isArray(list) && list.length >= 2) {
-      return list.slice(0, Math.min(3, list.length));
-    }
-
-    const submittedPlayers = getSubmittedBattlePlayers(assessment)
-      .sort((a, b) => {
-        const scoreDiff = Number(b.percentage || b.accuracy || 0) - Number(a.percentage || a.accuracy || 0);
-        if (scoreDiff !== 0) return scoreDiff;
-        return Number(a.timeTakenSeconds || 999999) - Number(b.timeTakenSeconds || 999999);
-      })
-      .map((player, index) => ({
-        ...player,
-        rank: player.rank || index + 1,
-        userName: player.userName || player.name || 'Player'
-      }));
-
-    return submittedPlayers.slice(0, Math.min(3, submittedPlayers.length));
-  };
-
-  const isCurrentUserBossQualified = (assessment = assessmentData) => {
-    return getBossQualifiersClient(assessment).some((player) => String(player.userId || player.id) === String(currentUser?.id));
-  };
-
-  const getBossGateMessage = (assessment = assessmentData) => {
-    const players = getBattlePlayers(assessment);
-    const submittedPlayers = getSubmittedBattlePlayers(assessment);
-    return `Boss Mode unlocks after all players submit. Submitted ${submittedPlayers.length}/${players.length}.`;
+  const isCurrentUserBossQualified = () => {
+    return getBossQualifiersClient().some((player) => String(player.userId || player.id) === String(currentUser?.id));
   };
 
   const handleBossAnswerChange = (questionId, value) => {
@@ -2379,17 +2207,7 @@ function App() {
       return;
     }
 
-    const latestAssessment = await refreshAssessmentRoom(assessmentData.id, false);
-    const gateAssessment = latestAssessment || assessmentData;
-
-    if (!areAllBattlePlayersSubmitted(gateAssessment)) {
-      setBossError(getBossGateMessage(gateAssessment));
-      return;
-    }
-
-    if (!isCurrentUserBossQualified(gateAssessment)) {
-      setBossError('Only the final Top 3 players can enter Boss Challenge.');
-    }
+    await refreshAssessmentRoom(assessmentData.id, false);
   };
 
   const handleStartBossBattle = async () => {
@@ -2407,18 +2225,9 @@ function App() {
     setBossAnswers({});
 
     try {
-      const latestAssessment = await refreshAssessmentRoom(assessmentData.id, true);
-      const gateAssessment = latestAssessment || assessmentData;
+      await refreshAssessmentRoom(assessmentData.id, true);
 
-      if (!areAllBattlePlayersSubmitted(gateAssessment)) {
-        throw new Error(getBossGateMessage(gateAssessment));
-      }
-
-      if (!isCurrentUserBossQualified(gateAssessment)) {
-        throw new Error('Only the final Top 3 players can enter Boss Challenge.');
-      }
-
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentData.id}/boss/start`, {
+      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentData.id}/boss/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
         body: JSON.stringify({ userId: currentUser.id })
@@ -2452,7 +2261,7 @@ function App() {
     setBossLoading(true);
     setBossError('');
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentData.id}/boss/submit`, {
+      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentData.id}/boss/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2486,7 +2295,7 @@ function App() {
     setAssessmentError('');
 
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/assessments/${assessmentData.id}/submit`, {
+      const response = await fetch(`http://localhost:5000/api/assessments/${assessmentData.id}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2617,7 +2426,7 @@ function App() {
       const finalUrl = inputUrl.trim();
       console.log('[FRONTEND URL SENDING]', finalUrl);
 
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/analyze', {
+      const response = await fetch('http://localhost:5000/api/analyze', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2671,7 +2480,7 @@ function App() {
     setChatLoading(true);
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/chat', {
+      const response = await fetch('http://localhost:5000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: userText, contextSummary: analysisData, chatHistory: chatHistory })
@@ -2697,7 +2506,7 @@ function App() {
     setGeneratedAnswers('');
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/generate-questions', {
+      const response = await fetch('http://localhost:5000/api/generate-questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2726,7 +2535,7 @@ function App() {
     setGeneratedAnswers('');
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/generate-answers', {
+      const response = await fetch('http://localhost:5000/api/generate-answers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2784,7 +2593,7 @@ function App() {
   const generatePptImagesForPairs = async (basePlan, options = {}) => {
     if (!basePlan?.slides?.length) return basePlan;
 
-    const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/ppt/images/generate', {
+    const response = await fetch('http://localhost:5000/api/ppt/images/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2835,7 +2644,7 @@ function App() {
     setPptPlan(null);
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/ppt/plan', {
+      const response = await fetch('http://localhost:5000/api/ppt/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3285,7 +3094,7 @@ function App() {
     if (actionType === 'saved') setPptSaveMessage('');
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/ppt/export', {
+      const response = await fetch('http://localhost:5000/api/ppt/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3876,7 +3685,7 @@ function App() {
                     }}
                   >
                     <span className="auth-option-content">
-                      <span className="auth-option-left"><span className="auth-option-icon google-icon">G</span><span>Sign in with Google</span></span>
+                      <span className="auth-option-left"><span className="auth-option-icon google-icon">G</span><span>Continue with Google</span></span>
                       <span>→</span>
                     </span>
                   </button>
@@ -4025,7 +3834,7 @@ function App() {
                       fontWeight: '900'
                     }}
                    className="simple-btn-glow">
-                    {isRegister ? 'G Sign up with Google' : 'G Sign in with Google'}
+                    G Continue with Google
                   </button>
                 )}
 
@@ -4079,7 +3888,7 @@ function App() {
     setCompareResult(null);
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/compare-videos', {
+      const response = await fetch('http://localhost:5000/api/compare-videos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4212,7 +4021,7 @@ function App() {
   const loadAdminBattleStats = async () => {
     if (!currentUser?.id || currentUser.role !== 'admin') return;
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/admin/battle-room-stats?adminId=${currentUser.id}&t=${Date.now()}`, {
+      const response = await fetch(`http://localhost:5000/api/admin/battle-room-stats?adminId=${currentUser.id}&t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -4242,7 +4051,7 @@ function App() {
     setBattleAnswers({});
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/create', {
+      const response = await fetch('http://localhost:5000/api/battle-rooms/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4285,7 +4094,7 @@ function App() {
     setBattleAnswers({});
 
     try {
-      const response = await fetch('https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/join', {
+      const response = await fetch('http://localhost:5000/api/battle-rooms/join', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4338,7 +4147,7 @@ function App() {
     if (!cleanCode) return null;
 
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${cleanCode}`, {
+      const response = await fetch(`http://localhost:5000/api/battle-rooms/${cleanCode}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -4358,7 +4167,7 @@ function App() {
     setBattleRoomError('');
 
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${battleRoom.roomCode}/start`, {
+      const response = await fetch(`http://localhost:5000/api/battle-rooms/${battleRoom.roomCode}/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: currentUser.id })
@@ -4419,7 +4228,7 @@ function App() {
     setBattleRoomError('');
 
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${battleRoom.roomCode}/submit`, {
+      const response = await fetch(`http://localhost:5000/api/battle-rooms/${battleRoom.roomCode}/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4445,7 +4254,7 @@ function App() {
   const handleQuitBattleRoom = async () => {
     if (battleRoom?.roomCode && currentUser?.id) {
       try {
-        await fetch(`https://briefbot-backend-giridhar.onrender.com/api/battle-rooms/${battleRoom.roomCode}/quit`, {
+        await fetch(`http://localhost:5000/api/battle-rooms/${battleRoom.roomCode}/quit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: currentUser.id })
@@ -4472,7 +4281,7 @@ function App() {
   const saveTestHistoryToProfile = async (payload = {}) => {
     if (!currentUser?.id) return;
     try {
-      await fetch(`https://briefbot-backend-giridhar.onrender.com/api/users/${currentUser.id}/test-history`, {
+      await fetch(`http://localhost:5000/api/users/${currentUser.id}/test-history`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -4486,7 +4295,7 @@ function App() {
     if (!currentUser?.id) return;
     setTestHistoryLoading(true);
     try {
-      const response = await fetch(`https://briefbot-backend-giridhar.onrender.com/api/users/${currentUser.id}/test-history?mode=${mode}&t=${Date.now()}`, {
+      const response = await fetch(`http://localhost:5000/api/users/${currentUser.id}/test-history?mode=${mode}&t=${Date.now()}`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await response.json();
@@ -4852,7 +4661,7 @@ function App() {
               {profileTab === 'edit' && (
                 <div>
                   <h2 style={{ margin: 0, color: '#FFF', fontSize: '1.8rem', fontWeight: '950' }}>Edit Profile</h2>
-                  <p style={{ color: '#9CA3AF', marginTop: '0.4rem' }}>Change your name and choose a profile photo from your device.</p>
+                  <p style={{ color: '#9CA3AF', marginTop: '0.4rem' }}>Change your name and choose a profile photo from your laptop.</p>
                   <form onSubmit={handleProfileUpdate} style={{ display: 'grid', gap: '1rem', marginTop: '1.4rem', maxWidth: '620px' }}>
                     <label style={{ color: '#9CA3AF', fontSize: '0.85rem', fontWeight: '800' }}>Change Name</label>
                     <input value={profileForm.name} onChange={(e) => setProfileForm((prev) => ({ ...prev, name: e.target.value }))} style={{ padding: '0.95rem', borderRadius: '12px', border: '1px solid #2D3748', backgroundColor: '#151D30', color: '#FFF', outline: 'none' }} />
@@ -4866,7 +4675,7 @@ function App() {
                         <label htmlFor="user-profile-photo-upload" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.55rem', background: 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: '#070A13', border: 'none', borderRadius: '12px', padding: '0.85rem 1.05rem', cursor: 'pointer', fontWeight: '950', boxShadow: '0 12px 28px rgba(0,242,254,0.20)', width: 'fit-content' }}>
                           📷 Choose Profile Photo
                         </label>
-                        <small style={{ color: '#9CA3AF', display: 'block', marginTop: '0.5rem' }}>Choose an image from your device. It will be compressed automatically.</small>
+                        <small style={{ color: '#9CA3AF', display: 'block', marginTop: '0.5rem' }}>Choose an image from your laptop. It will be compressed automatically.</small>
                       </div>
                     </div>
                     <button type="submit" disabled={profileLoading} style={{ background: 'linear-gradient(135deg, #00F2FE, #4FACFE)', color: '#070A13', border: 'none', borderRadius: '12px', padding: '0.95rem', fontWeight: '950', cursor: 'pointer' }} className="simple-btn-glow">{profileLoading ? 'Saving...' : 'Save Changes'}</button>
@@ -4925,8 +4734,9 @@ function App() {
                   ) : (
                     <div style={{ backgroundColor: '#0B1120', border: '1px dashed #374151', borderRadius: '16px', padding: '2.5rem', textAlign: 'center', marginTop: '1.2rem' }}>
                       <div style={{ fontSize: '2.4rem', marginBottom: '0.7rem' }}>🎞</div>
-                      <h3 style={{ color: '#FFF', margin: 0 }}>No recent PPTs found</h3>
-                      <p style={{ color: '#9CA3AF', margin: '0.5rem 0 0 0' }}>Your generated/exported PPT records will appear here automatically after you create or export a PPT.</p>
+                      <h3 style={{ color: '#FFF', margin: 0 }}>No PPTs yet</h3>
+                      <p style={{ color: '#9CA3AF', margin: '0.5rem 0 1.2rem 0' }}>Generate a summary, create PPT slides, then click Export PPT.</p>
+                      <button type="button" onClick={() => setCurrentPage('workspace')} className="history-open-btn simple-btn-glow">Create PPT</button>
                     </div>
                   )}
                 </div>
@@ -5338,7 +5148,7 @@ function App() {
               {adminTab === 'edit' && (
                 <div>
                   <h2 style={{ margin: 0, color: '#FFF', fontSize: '1.8rem', fontWeight: '950' }}>Edit Admin Profile</h2>
-                  <p style={{ color: '#9CA3AF' }}>Change admin name and choose a profile photo from your device.</p>
+                  <p style={{ color: '#9CA3AF' }}>Change admin name and choose a profile photo from your laptop.</p>
                   <form onSubmit={handleProfileUpdate} style={{ display: 'grid', gap: '1rem', marginTop: '1.4rem', maxWidth: '620px' }}>
                     <label style={{ color: '#9CA3AF', fontSize: '0.85rem', fontWeight: '800' }}>Change Name</label>
                     <input value={profileForm.name} onChange={(e) => setProfileForm((prev) => ({ ...prev, name: e.target.value }))} style={{ padding: '0.95rem', borderRadius: '12px', border: '1px solid #2D3748', backgroundColor: '#151D30', color: '#FFF', outline: 'none' }} />
@@ -5352,7 +5162,7 @@ function App() {
                         <label htmlFor="admin-profile-photo-upload" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.55rem', background: 'linear-gradient(135deg, #A855F7, #F472B6)', color: '#FFFFFF', border: 'none', borderRadius: '12px', padding: '0.85rem 1.05rem', cursor: 'pointer', fontWeight: '950', boxShadow: '0 12px 28px rgba(168,85,247,0.24)', width: 'fit-content' }}>
                           📷 Choose Admin Photo
                         </label>
-                        <small style={{ color: '#9CA3AF', display: 'block', marginTop: '0.5rem' }}>Choose an image from your device. It will be compressed automatically.</small>
+                        <small style={{ color: '#9CA3AF', display: 'block', marginTop: '0.5rem' }}>Choose an image from your laptop. It will be compressed automatically.</small>
                       </div>
                     </div>
                     <button type="submit" disabled={profileLoading} style={{ background: 'linear-gradient(135deg, #A855F7, #F472B6)', color: '#FFF', border: 'none', borderRadius: '12px', padding: '0.95rem', fontWeight: '950', cursor: 'pointer' }} className="simple-btn-glow">{profileLoading ? 'Saving...' : 'Save Admin Profile'}</button>
@@ -5590,7 +5400,7 @@ function App() {
                     <span style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.10)' }} />
                   </div>
                   <button type="button" onClick={() => handleGoogleSignIn('user')} disabled={authLoading} style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.16)', color: '#FFF', borderRadius: '14px', padding: '0.95rem', cursor: authLoading ? 'not-allowed' : 'pointer', fontWeight: '900', opacity: authLoading ? 0.7 : 1 }} className="simple-btn-glow">
-                    {isRegister ? 'G Sign up with Google' : 'G Sign in with Google'}
+                    G Continue with Google
                   </button>
                 </>
               )}
@@ -5869,6 +5679,7 @@ function App() {
 
           <footer style={{ borderTop: '1px solid #1F2937', paddingTop: '2.2rem', textAlign: 'center', color: '#4B5563', fontSize: '0.9rem', marginTop: '3.2rem' }}>
             <p style={{ margin: '0 0 0.4rem 0' }}>Powered by Brief Bot • Summary • PPT • Assessment</p>
+            <p style={{ margin: 0 }}>A more stylish home page for your project showcase.</p>
           </footer>
         </div>
       )}
@@ -7019,9 +6830,9 @@ function App() {
                   </div>
                 </div>
 
-                <div className="custom-scroll battle-question-scroll" style={{ maxHeight: '620px', overflowY: 'auto', padding: '1.4rem', display: 'grid', gap: '1rem' }}>
+                <div className="custom-scroll" style={{ maxHeight: '620px', overflowY: 'auto', padding: '1.4rem', display: 'grid', gap: '1rem' }}>
                   {(assessmentData.questions || []).map((question, index) => (
-                    <div key={question.id} className="battle-question-card" style={{ backgroundColor: '#0B0F19', border: '1px solid #1F2937', borderRadius: '16px', padding: '1.1rem' }}>
+                    <div key={question.id} style={{ backgroundColor: '#0B0F19', border: '1px solid #1F2937', borderRadius: '16px', padding: '1.1rem' }}>
                       <h4 style={{ margin: '0 0 0.9rem 0', color: '#FFF', lineHeight: '1.5' }}>{index + 1}. {question.question}</h4>
                       {question.type === 'sjt' && (
                         <div style={{ display: 'inline-flex', color: '#FBBF24', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: '999px', padding: '0.32rem 0.65rem', fontSize: '0.74rem', fontWeight: '950', marginBottom: '0.85rem' }}>
@@ -7031,9 +6842,9 @@ function App() {
                       {(question.type === 'mcq' || question.type === 'sjt') && (
                         <div style={{ display: 'grid', gap: '0.65rem' }}>
                           {(question.options || []).map((option, optIndex) => (
-                            <label key={optIndex} className="battle-option-card" style={{ display: 'flex', alignItems: 'flex-start', gap: '0.65rem', padding: '0.75rem', borderRadius: '12px', border: assessmentAnswers[question.id] === option ? '1px solid #00F2FE' : '1px solid #1F2937', backgroundColor: assessmentAnswers[question.id] === option ? 'rgba(0,242,254,0.08)' : '#111827', color: '#D1D5DB', cursor: assessmentResult ? 'default' : 'pointer', width: '100%', boxSizing: 'border-box' }}>
+                            <label key={optIndex} style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', padding: '0.75rem', borderRadius: '12px', border: assessmentAnswers[question.id] === option ? '1px solid #00F2FE' : '1px solid #1F2937', backgroundColor: assessmentAnswers[question.id] === option ? 'rgba(0,242,254,0.08)' : '#111827', color: '#D1D5DB', cursor: assessmentResult ? 'default' : 'pointer' }}>
                               <input type="radio" disabled={Boolean(assessmentResult)} checked={assessmentAnswers[question.id] === option} onChange={() => handleAssessmentAnswerChange(question.id, option)} />
-                              <span className="battle-option-text" style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '1.5' }}>{option}</span>
+                              <span style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '1.5' }}>{option}</span>
                             </label>
                           ))}
                         </div>
@@ -7182,26 +6993,14 @@ function App() {
                     
                     {isBattleAssessment() && (
                       <div style={{ marginTop: '1.2rem', background: 'linear-gradient(145deg, rgba(127,29,29,0.30), rgba(15,23,42,0.96))', border: '1px solid rgba(248,113,113,0.35)', borderRadius: '20px', padding: '1.1rem', display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <div style={{ flex: '1 1 260px' }}>
+                        <div>
                           <div style={{ color: '#FCA5A5', fontSize: '0.78rem', fontWeight: '950', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Final Round</div>
                           <h3 style={{ color: '#FFF', margin: '0.25rem 0 0 0', fontWeight: '950' }}>🔥 Brief Boss Challenge</h3>
-                          <p style={{ color: '#CBD5E1', margin: '0.4rem 0 0 0', lineHeight: '1.55' }}>
-                            {!areAllBattlePlayersSubmitted()
-                              ? getBossGateMessage()
-                              : isCurrentUserBossQualified()
-                                ? 'All players submitted. You are in the Top 3, so Boss Arena is unlocked.'
-                                : 'All players submitted. Boss Arena is available only for the final Top 3 players.'}
-                          </p>
+                          <p style={{ color: '#CBD5E1', margin: '0.4rem 0 0 0', lineHeight: '1.55' }}>Boss mode opens in its own fiery tab. Top battle performers can continue there and fight for the champion crown.</p>
                         </div>
-                        {areAllBattlePlayersSubmitted() && isCurrentUserBossQualified() ? (
-                          <button type="button" onClick={openBossChallengeTab} className="simple-btn-glow" style={{ background: 'linear-gradient(135deg, #EF4444, #F97316)', color: '#FFF7ED', border: 'none', borderRadius: '14px', padding: '0.9rem 1.2rem', cursor: 'pointer', fontWeight: '950' }}>
-                            Open Boss Mode →
-                          </button>
-                        ) : (
-                          <button type="button" onClick={() => refreshAssessmentRoom(assessmentData?.id, false)} className="simple-btn-glow" style={{ background: 'rgba(15,23,42,0.80)', color: '#FDE68A', border: '1px solid rgba(251,191,36,0.30)', borderRadius: '14px', padding: '0.9rem 1.2rem', cursor: 'pointer', fontWeight: '950' }}>
-                            Refresh Status
-                          </button>
-                        )}
+                        <button type="button" onClick={openBossChallengeTab} className="simple-btn-glow" style={{ background: 'linear-gradient(135deg, #EF4444, #F97316)', color: '#FFF7ED', border: 'none', borderRadius: '14px', padding: '0.9rem 1.2rem', cursor: 'pointer', fontWeight: '950' }}>
+                          Open Boss Mode →
+                        </button>
                       </div>
                     )}
 
