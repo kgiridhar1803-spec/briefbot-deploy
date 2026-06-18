@@ -472,7 +472,7 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'brief-bot-audio-transcription-v6-debug-2026-06-18',
+    version: 'brief-bot-no-fake-summary-final-2026-06-18',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
@@ -1208,6 +1208,29 @@ function buildTranscriptFromTranscriptionResponse(payload) {
   return buildGroupedTranscript(lines);
 }
 
+function formatAudioTranscriptionFailure(message = '') {
+  const value = String(message || '');
+  const lower = value.toLowerCase();
+
+  if (lower.includes('sign in to confirm') || lower.includes('not a bot') || lower.includes('cookies-from-browser') || lower.includes('cookies')) {
+    return 'This video does not provide accessible captions, and YouTube blocked audio extraction on the deployed server. Please try another YouTube video with captions/auto-captions.';
+  }
+
+  if (lower.includes('private') || lower.includes('unavailable') || lower.includes('deleted')) {
+    return 'This video is not accessible to the server. It may be private, deleted, unavailable, or restricted.';
+  }
+
+  if (lower.includes('max-filesize') || lower.includes('larger than')) {
+    return 'This video audio is too large for server transcription. Please try a shorter video.';
+  }
+
+  if (lower.includes('transcription failed') || lower.includes('invalid api key') || lower.includes('unauthorized')) {
+    return 'Audio transcription failed. Please check GROQ_TRANSCRIPTION_API_KEY in Render Environment.';
+  }
+
+  return `Captions were unavailable and audio transcription failed: ${value.slice(0, 220)}`;
+}
+
 async function transcribeYouTubeAudioFallback(videoId, selectedLanguage) {
   const config = getTranscriptionProviderConfig();
   if (!config) {
@@ -1268,7 +1291,7 @@ async function transcribeYouTubeAudioFallback(videoId, selectedLanguage) {
     };
   } catch (error) {
     console.log('[Audio Transcription] failed:', error.message);
-    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null, errorMessage: error.message || 'Audio transcription failed.' };
+    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null, errorMessage: formatAudioTranscriptionFailure(error.message || 'Audio transcription failed.') };
   } finally {
     await cleanupFile(audioPath);
   }
@@ -1301,7 +1324,7 @@ async function getYouTubeContentWithFallback(videoId, selectedLanguage, original
       langUsed: selectedLanguage || 'audio',
       sourceType: 'audio-transcription-failed',
       fallbackUsed: false,
-      errorMessage: audioTranscript?.errorMessage || 'Captions were unavailable and audio transcription also failed. Check Render logs for [Audio Transcription] failed.'
+      errorMessage: audioTranscript?.errorMessage || 'This video does not provide accessible captions, and audio transcription failed on the deployed server. Please try another YouTube video with captions/auto-captions.'
     };
   }
 
