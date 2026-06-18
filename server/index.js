@@ -472,7 +472,7 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'brief-bot-audio-transcription-v5-2026-06-18',
+    version: 'brief-bot-audio-transcription-v6-debug-2026-06-18',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
@@ -1141,14 +1141,15 @@ async function cleanupFile(filePath) {
 
 async function downloadYouTubeAudioForTranscription(videoId) {
   const safeVideoId = String(videoId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16);
-  const audioPath = path.join(os.tmpdir(), `briefbot-${safeVideoId}-${Date.now()}.mp3`);
+  const prefix = `briefbot-${safeVideoId}-${Date.now()}`;
+  const outputTemplate = path.join(os.tmpdir(), `${prefix}.%(ext)s`);
   const videoUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 
   await youtubedl(videoUrl, {
     extractAudio: true,
     audioFormat: 'mp3',
     audioQuality: '5',
-    output: audioPath,
+    output: outputTemplate,
     noPlaylist: true,
     noWarnings: true,
     preferFreeFormats: true,
@@ -1156,11 +1157,24 @@ async function downloadYouTubeAudioForTranscription(videoId) {
     maxFilesize: '35m'
   });
 
-  if (!fs.existsSync(audioPath)) {
-    throw new Error('Audio download finished but MP3 file was not created.');
+  const tempFiles = await fs.promises.readdir(os.tmpdir());
+  const matchedFiles = tempFiles
+    .filter((name) => name.startsWith(prefix))
+    .map((name) => path.join(os.tmpdir(), name))
+    .filter((filePath) => fs.existsSync(filePath));
+
+  const mp3File = matchedFiles.find((filePath) => filePath.toLowerCase().endsWith('.mp3')) || matchedFiles[0];
+  if (!mp3File) {
+    throw new Error('Audio download finished but no audio file was created in temp folder.');
   }
 
-  return audioPath;
+  const stats = await fs.promises.stat(mp3File);
+  if (!stats.size || stats.size < 1024) {
+    throw new Error('Audio file was created but it is empty or too small.');
+  }
+
+  console.log(`[Audio Transcription] audioFile=${path.basename(mp3File)}, sizeMB=${(stats.size / (1024 * 1024)).toFixed(2)}`);
+  return mp3File;
 }
 
 function buildTranscriptFromTranscriptionResponse(payload) {
@@ -1254,7 +1268,7 @@ async function transcribeYouTubeAudioFallback(videoId, selectedLanguage) {
     };
   } catch (error) {
     console.log('[Audio Transcription] failed:', error.message);
-    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
+    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null, errorMessage: error.message || 'Audio transcription failed.' };
   } finally {
     await cleanupFile(audioPath);
   }
@@ -1275,6 +1289,20 @@ async function getYouTubeContentWithFallback(videoId, selectedLanguage, original
   if (audioTranscript?.ok && audioTranscript?.text) {
     setCachedTranscript(videoId, selectedLanguage, audioTranscript);
     return { ...audioTranscript, sourceType: 'audio-transcription', fallbackUsed: false };
+  }
+
+  // When a transcription key is configured, do not silently show a fake metadata-only summary.
+  // A clear error is better than a wrong project demo summary.
+  if (getTranscriptionProviderConfig() && process.env.ALLOW_METADATA_FALLBACK !== 'true') {
+    return {
+      ok: false,
+      text: '',
+      captionCount: 0,
+      langUsed: selectedLanguage || 'audio',
+      sourceType: 'audio-transcription-failed',
+      fallbackUsed: false,
+      errorMessage: audioTranscript?.errorMessage || 'Captions were unavailable and audio transcription also failed. Check Render logs for [Audio Transcription] failed.'
+    };
   }
 
   const metadata = await fetchYouTubeMetadataFallback(videoId, originalUrl);
@@ -4126,7 +4154,7 @@ app.post('/api/analyze', async (req, res) => {
 
         if (!transcript.ok) {
           return res.status(422).json({
-            error: '⚠️ This YouTube link is not accessible enough to process. It may be private, deleted, age-restricted, live-only, or region-blocked.'
+            error: transcript.errorMessage || '⚠️ This YouTube link is not accessible enough to process. It may be private, deleted, age-restricted, live-only, region-blocked, or captions/audio transcription are unavailable.'
           });
         }
 
