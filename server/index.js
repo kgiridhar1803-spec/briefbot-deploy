@@ -8,8 +8,11 @@ import * as cheerio from 'cheerio';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import os from 'os';
 import admin from 'firebase-admin';
 import pptxgen from 'pptxgenjs';
+import youtubedl from 'youtube-dl-exec';
+import ffmpegPath from 'ffmpeg-static';
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -469,10 +472,11 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'brief-bot-transcript-captions-v4-2026-06-18',
+    version: 'brief-bot-audio-transcription-v5-2026-06-18',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
+    transcriptionKeyLoaded: (process.env.GROQ_TRANSCRIPTION_API_KEY || process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY) ? 'YES' : 'NO',
     models: getModelList(),
     port
   });
@@ -1103,6 +1107,159 @@ function buildFallbackTranscriptFromMetadata(meta = {}, videoId = '') {
   return chunks.join('\n').slice(0, MAX_TRANSCRIPT_CHARS);
 }
 
+function getTranscriptionProviderConfig() {
+  const groqKey = process.env.GROQ_TRANSCRIPTION_API_KEY || process.env.GROQ_API_KEY || '';
+  if (groqKey) {
+    return {
+      provider: 'groq',
+      apiKey: groqKey,
+      endpoint: 'https://api.groq.com/openai/v1/audio/transcriptions',
+      model: process.env.GROQ_TRANSCRIPTION_MODEL || process.env.TRANSCRIPTION_MODEL || 'whisper-large-v3-turbo'
+    };
+  }
+
+  const openAiKey = process.env.OPENAI_API_KEY || '';
+  if (openAiKey) {
+    return {
+      provider: 'openai',
+      apiKey: openAiKey,
+      endpoint: 'https://api.openai.com/v1/audio/transcriptions',
+      model: process.env.OPENAI_TRANSCRIPTION_MODEL || process.env.TRANSCRIPTION_MODEL || 'whisper-1'
+    };
+  }
+
+  return null;
+}
+
+async function cleanupFile(filePath) {
+  try {
+    if (filePath && fs.existsSync(filePath)) await fs.promises.unlink(filePath);
+  } catch (error) {
+    console.log('[Audio Transcription] cleanup skipped:', error.message);
+  }
+}
+
+async function downloadYouTubeAudioForTranscription(videoId) {
+  const safeVideoId = String(videoId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16);
+  const audioPath = path.join(os.tmpdir(), `briefbot-${safeVideoId}-${Date.now()}.mp3`);
+  const videoUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+
+  await youtubedl(videoUrl, {
+    extractAudio: true,
+    audioFormat: 'mp3',
+    audioQuality: '5',
+    output: audioPath,
+    noPlaylist: true,
+    noWarnings: true,
+    preferFreeFormats: true,
+    ffmpegLocation: ffmpegPath || undefined,
+    maxFilesize: '35m'
+  });
+
+  if (!fs.existsSync(audioPath)) {
+    throw new Error('Audio download finished but MP3 file was not created.');
+  }
+
+  return audioPath;
+}
+
+function buildTranscriptFromTranscriptionResponse(payload) {
+  const segments = Array.isArray(payload?.segments) ? payload.segments : [];
+
+  if (segments.length) {
+    const lines = segments
+      .map((segment) => ({
+        start: Number(segment.start || 0),
+        text: cleanText(segment.text || '')
+      }))
+      .filter((line) => line.text);
+
+    return buildGroupedTranscript(lines);
+  }
+
+  const fullText = cleanText(payload?.text || '');
+  if (!fullText) return '';
+
+  const words = fullText.split(/\s+/).filter(Boolean);
+  const lines = [];
+  const wordsPerGroup = 45;
+
+  for (let index = 0; index < words.length; index += wordsPerGroup) {
+    lines.push({
+      start: Math.floor(index / wordsPerGroup) * TIMESTAMP_GROUP_SECONDS,
+      text: words.slice(index, index + wordsPerGroup).join(' ')
+    });
+  }
+
+  return buildGroupedTranscript(lines);
+}
+
+async function transcribeYouTubeAudioFallback(videoId, selectedLanguage) {
+  const config = getTranscriptionProviderConfig();
+  if (!config) {
+    console.log('[Audio Transcription] No transcription key found. Add GROQ_TRANSCRIPTION_API_KEY or OPENAI_API_KEY.');
+    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
+  }
+
+  let audioPath = '';
+
+  try {
+    console.log(`[Audio Transcription] Downloading audio for video=${videoId}, provider=${config.provider}, model=${config.model}`);
+    audioPath = await downloadYouTubeAudioForTranscription(videoId);
+
+    const audioBuffer = await fs.promises.readFile(audioPath);
+    const form = new FormData();
+    form.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), `${videoId}.mp3`);
+    form.append('model', config.model);
+    form.append('response_format', 'verbose_json');
+    form.append('temperature', '0');
+
+    if (selectedLanguage && selectedLanguage !== 'English') {
+      const languageCode = languageToCaptionCodes(selectedLanguage)?.[0];
+      if (languageCode && /^[a-z]{2}/i.test(languageCode)) {
+        form.append('language', languageCode.slice(0, 2).toLowerCase());
+      }
+    }
+
+    const response = await fetch(config.endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+      body: form
+    });
+
+    const rawText = await response.text();
+    let data = {};
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      throw new Error(`Transcription returned non-JSON response: ${rawText.slice(0, 160)}`);
+    }
+
+    if (!response.ok) {
+      throw new Error(data.error?.message || data.error || `Transcription failed with status ${response.status}`);
+    }
+
+    const transcriptText = buildTranscriptFromTranscriptionResponse(data);
+    const words = countWords(transcriptText);
+    console.log(`[Audio Transcription] words=${words}, chars=${transcriptText.length}`);
+
+    return {
+      ok: words >= MIN_TRANSCRIPT_WORDS,
+      tooShort: words < MIN_TRANSCRIPT_WORDS,
+      text: transcriptText,
+      captionCount: Array.isArray(data.segments) ? data.segments.length : 0,
+      langUsed: data.language || selectedLanguage || 'audio',
+      sourceType: 'audio-transcription',
+      fallbackUsed: false
+    };
+  } catch (error) {
+    console.log('[Audio Transcription] failed:', error.message);
+    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
+  } finally {
+    await cleanupFile(audioPath);
+  }
+}
+
 async function getYouTubeContentWithFallback(videoId, selectedLanguage, originalUrl = '') {
   let transcript = getCachedTranscript(videoId, selectedLanguage);
   if (!transcript) {
@@ -1112,6 +1269,12 @@ async function getYouTubeContentWithFallback(videoId, selectedLanguage, original
   if (transcript?.ok && transcript?.text) {
     setCachedTranscript(videoId, selectedLanguage, transcript);
     return { ...transcript, sourceType: transcript.sourceType || 'captions', fallbackUsed: false };
+  }
+
+  const audioTranscript = await transcribeYouTubeAudioFallback(videoId, selectedLanguage);
+  if (audioTranscript?.ok && audioTranscript?.text) {
+    setCachedTranscript(videoId, selectedLanguage, audioTranscript);
+    return { ...audioTranscript, sourceType: 'audio-transcription', fallbackUsed: false };
   }
 
   const metadata = await fetchYouTubeMetadataFallback(videoId, originalUrl);
