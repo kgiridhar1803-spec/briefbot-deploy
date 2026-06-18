@@ -469,7 +469,7 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'brief-bot-stable-summary-v3-2026-06-18',
+    version: 'brief-bot-transcript-captions-v4-2026-06-18',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
@@ -814,12 +814,169 @@ function buildGroupedTranscript(lines) {
     .slice(0, MAX_TRANSCRIPT_CHARS);
 }
 
+function decodeCaptionText(value = '') {
+  return cleanText(String(value || '')
+    .replace(/\n/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>'));
+}
+
+function parseYouTubePlayerResponse(html = '') {
+  const text = String(html || '');
+  const patterns = [
+    /ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});/,
+    /window\["ytInitialPlayerResponse"\]\s*=\s*(\{[\s\S]+?\});/,
+    /var\s+ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});/
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      try {
+        return JSON.parse(match[1]);
+      } catch (error) {
+        console.log('[TimedText] Player response JSON parse failed:', error.message);
+      }
+    }
+  }
+
+  return null;
+}
+
+function pickBestCaptionTrack(captionTracks = [], selectedLanguage = 'English') {
+  if (!Array.isArray(captionTracks) || !captionTracks.length) return null;
+
+  const preferredCodes = Array.from(new Set([
+    ...languageToCaptionCodes(selectedLanguage),
+    'en', 'te', 'hi', 'ta', 'kn', 'ml'
+  ].filter(Boolean).map((item) => String(item).toLowerCase())));
+
+  for (const code of preferredCodes) {
+    const exact = captionTracks.find((track) => String(track.languageCode || '').toLowerCase() === code);
+    if (exact) return exact;
+
+    const startsWith = captionTracks.find((track) => String(track.languageCode || '').toLowerCase().startsWith(code.split('-')[0]));
+    if (startsWith) return startsWith;
+  }
+
+  const autoTrack = captionTracks.find((track) => track.kind === 'asr');
+  if (autoTrack) return autoTrack;
+
+  return captionTracks[0];
+}
+
+function parseJson3CaptionLines(payload) {
+  const lines = [];
+  const events = Array.isArray(payload?.events) ? payload.events : [];
+
+  for (const event of events) {
+    const segs = Array.isArray(event.segs) ? event.segs : [];
+    const text = decodeCaptionText(segs.map((seg) => seg.utf8 || '').join(''));
+    if (!text || /^\s*$/.test(text)) continue;
+
+    lines.push({
+      start: Number(event.tStartMs || 0) / 1000,
+      text
+    });
+  }
+
+  return lines;
+}
+
+function parseXmlCaptionLines(xml = '') {
+  const lines = [];
+  const matches = [...String(xml || '').matchAll(/<text[^>]+start=["']([^"']+)["'][^>]*>([\s\S]*?)<\/text>/g)];
+
+  for (const match of matches) {
+    const start = Number(match[1] || 0);
+    const text = decodeCaptionText(match[2] || '');
+    if (!text) continue;
+    lines.push({ start, text });
+  }
+
+  return lines;
+}
+
+async function fetchYouTubeTranscriptFromTimedText(videoId, selectedLanguage) {
+  try {
+    const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&hl=en`;
+    const { data: html } = await axios.get(watchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
+      },
+      timeout: 12000
+    });
+
+    const playerResponse = parseYouTubePlayerResponse(html);
+    const captionTracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    const track = pickBestCaptionTrack(captionTracks, selectedLanguage);
+
+    if (!track?.baseUrl) {
+      console.log('[TimedText] No captionTracks found for video:', videoId);
+      return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
+    }
+
+    const baseUrl = String(track.baseUrl).replace(/\\u0026/g, '&');
+    const jsonUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}fmt=json3`;
+
+    try {
+      const { data: jsonPayload } = await axios.get(jsonUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        timeout: 12000
+      });
+
+      const lines = parseJson3CaptionLines(jsonPayload);
+      if (lines.length) {
+        const groupedTranscript = buildGroupedTranscript(lines);
+        const words = countWords(groupedTranscript);
+        console.log(`[TimedText] lang=${track.languageCode || 'auto'}, captionLines=${lines.length}, groupedWords=${words}`);
+        return {
+          ok: words >= MIN_TRANSCRIPT_WORDS,
+          tooShort: words < MIN_TRANSCRIPT_WORDS,
+          text: groupedTranscript,
+          captionCount: lines.length,
+          langUsed: track.languageCode || 'timedtext',
+          sourceType: 'timedtext-captions'
+        };
+      }
+    } catch (jsonError) {
+      console.log('[TimedText] json3 failed, trying XML:', jsonError.message);
+    }
+
+    const { data: xmlPayload } = await axios.get(baseUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      timeout: 12000
+    });
+
+    const xmlLines = parseXmlCaptionLines(xmlPayload);
+    const groupedTranscript = buildGroupedTranscript(xmlLines);
+    const words = countWords(groupedTranscript);
+    console.log(`[TimedText XML] lang=${track.languageCode || 'auto'}, captionLines=${xmlLines.length}, groupedWords=${words}`);
+
+    return {
+      ok: words >= MIN_TRANSCRIPT_WORDS,
+      tooShort: words < MIN_TRANSCRIPT_WORDS,
+      text: groupedTranscript,
+      captionCount: xmlLines.length,
+      langUsed: track.languageCode || 'timedtext-xml',
+      sourceType: 'timedtext-captions'
+    };
+  } catch (error) {
+    console.log('[TimedText] fallback failed:', error.message);
+    return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
+  }
+}
+
 async function fetchYouTubeTranscript(videoId, selectedLanguage) {
   if (!videoId || typeof videoId !== 'string' || videoId.trim().length !== 11) {
     return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
   }
 
-  const langs = Array.from(new Set([...languageToCaptionCodes(selectedLanguage), 'en']));
+  const langs = Array.from(new Set([...languageToCaptionCodes(selectedLanguage), 'en', 'te', 'hi', 'ta', 'kn', 'ml']));
 
   for (const lang of langs) {
     try {
@@ -840,6 +997,15 @@ async function fetchYouTubeTranscript(videoId, selectedLanguage) {
     } catch (err) {
       console.log(`[Transcript] Failed lang=${lang}: ${err.message}`);
     }
+  }
+
+  const timedTextTranscript = await fetchYouTubeTranscriptFromTimedText(videoId.trim(), selectedLanguage);
+  if (timedTextTranscript?.ok && timedTextTranscript?.text) {
+    return timedTextTranscript;
+  }
+
+  if (timedTextTranscript?.tooShort && timedTextTranscript?.text) {
+    return timedTextTranscript;
   }
 
   return { ok: false, tooShort: false, text: '', captionCount: 0, langUsed: null };
@@ -945,7 +1111,7 @@ async function getYouTubeContentWithFallback(videoId, selectedLanguage, original
 
   if (transcript?.ok && transcript?.text) {
     setCachedTranscript(videoId, selectedLanguage, transcript);
-    return { ...transcript, sourceType: 'captions', fallbackUsed: false };
+    return { ...transcript, sourceType: transcript.sourceType || 'captions', fallbackUsed: false };
   }
 
   const metadata = await fetchYouTubeMetadataFallback(videoId, originalUrl);
