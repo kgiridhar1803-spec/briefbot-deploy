@@ -136,6 +136,24 @@ function safeHistoryItem(doc) {
   };
 }
 
+
+function safePptItem(doc) {
+  const data = doc?.data ? doc.data() : (doc || {});
+  return {
+    id: doc?.id || data.id || `ppt-${Date.now()}`,
+    userId: data.userId || '',
+    title: data.title || 'Brief Bot PPT',
+    subtitle: data.subtitle || '',
+    actionType: data.actionType || 'generated',
+    slideCount: Number(data.slideCount || 0),
+    template: data.template || 'floral',
+    fileName: data.fileName || '',
+    savedAt: data.savedAt || data.createdAt || null,
+    createdAt: data.createdAt || null,
+    updatedAt: data.updatedAt || null
+  };
+}
+
 async function saveSummaryHistoryToFirebase({ userId, url, summary, language, summaryType, title, description }) {
   const cleanUserId = String(userId || '').trim();
   const cleanUrl = String(url || '').trim();
@@ -451,7 +469,7 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'brief-bot-admin-dashboard-users-only-2026-06-01-v9',
+    version: 'brief-bot-old-stable-essential-fixes-2026-06-19',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
@@ -3328,7 +3346,35 @@ app.get('/api/admin/users/:userId/progress', async (req, res) => {
     return res.json({ ok: true, ...progress });
   } catch (error) {
     console.error('[Admin User Progress Error]', error);
-    return res.status(500).json({ error: error.message });
+    const userId = String(req.params.userId || '').trim();
+    let fallbackUser = null;
+    try {
+      fallbackUser = await getUserProfile(userId);
+    } catch {}
+
+    return res.json({
+      ok: true,
+      warning: error.message,
+      user: fallbackUser || { id: userId, name: 'User', email: '' },
+      summaries: [],
+      ppts: [],
+      attempts: [],
+      battleRooms: [],
+      smartCompares: [],
+      stats: {
+        summaryCount: Number(fallbackUser?.summariesGenerated || 0),
+        pptCount: Number(fallbackUser?.pptsGenerated || 0),
+        assessmentCount: 0,
+        assessmentsCreated: 0,
+        battleRoomCount: 0,
+        smartCompareCount: 0,
+        attemptCount: 0,
+        averageScore: 0,
+        highestScore: 0,
+        lowestScore: 0,
+        lastScore: 0
+      }
+    });
   }
 });
 
@@ -4954,6 +5000,8 @@ function getPptTemplateStyle(template = 'floral') {
     }
   };
 
+  if (template === 'chalkboard') return styles.academic || styles.floral;
+  if (template === 'futuristic') return styles.modern || styles.floral;
   return styles[template] || styles.floral;
 }
 
@@ -4971,12 +5019,10 @@ function getPptFontStyleMetaBackend(style = 'modern') {
   return map[style] || map.modern;
 }
 
-async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Presentation', actionType = 'exported', slideCount = 0, template = 'floral' } = {}) {
+async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Presentation', actionType = 'exported', slideCount = 0, template = 'floral', fileName = '' } = {}) {
   try {
     const cleanUserId = String(userId || '').trim();
-    if (!cleanUserId || !db) {
-      return null;
-    }
+    if (!cleanUserId) return null;
 
     const record = {
       userId: cleanUserId,
@@ -4984,16 +5030,18 @@ async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Present
       actionType: String(actionType || 'exported').slice(0, 40),
       slideCount: Number(slideCount || 0),
       template: String(template || 'floral').slice(0, 40),
-      createdAt: new Date().toISOString()
+      fileName: String(fileName || '').slice(0, 160),
+      savedAt: nowISO(),
+      createdAt: nowISO(),
+      updatedAt: nowISO()
     };
 
-    const collectionRef = db.collection('pptHistory');
-    const docRef = await collectionRef.add(record);
+    const docRef = usersCollection.doc(cleanUserId).collection('savedPpts').doc();
+    await docRef.set(record);
+    await usersCollection.doc(cleanUserId).set({ pptsGenerated: admin.firestore.FieldValue.increment(1), updatedAt: nowISO() }, { merge: true });
+    await addActivity({ userId: cleanUserId, type: 'ppt_record_saved', meta: { title: record.title, actionType: record.actionType, slideCount: record.slideCount } });
 
-    return {
-      id: docRef.id,
-      ...record
-    };
+    return { id: docRef.id, ...record };
   } catch (error) {
     console.error('[PPT Firebase Save Skipped]', error.message);
     return null;
@@ -5217,7 +5265,8 @@ app.post('/api/ppt/export', async (req, res) => {
     if (userId && saveRecord) {
       await savePptRecordToFirebase({
         userId,
-        pptPlan: plan,
+        title: plan.title,
+        slideCount: plan.slides.length,
         template,
         fileName: `${safeFileName}.pptx`,
         actionType
