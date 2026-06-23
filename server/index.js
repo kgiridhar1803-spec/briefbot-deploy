@@ -469,10 +469,12 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'briefbot-gemini-youtube-audio-summary-v3-2026-06-23',
+    version: 'briefbot-gemini-youtube-audio-summary-v4-2026-06-23',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
+    geminiVideoKeyLoaded: process.env.GEMINI_API_KEY ? 'YES' : 'NO',
+    geminiVideoModel: process.env.GEMINI_VIDEO_MODEL || 'gemini-2.5-flash',
     models: getModelList(),
     port
   });
@@ -3670,6 +3672,17 @@ function extractGeminiOutputText(data) {
   if (typeof data.text === 'string') return data.text;
   if (typeof data.response?.text === 'string') return data.response.text;
 
+  const candidateTexts = [];
+  if (Array.isArray(data.candidates)) {
+    for (const candidate of data.candidates) {
+      const parts = candidate?.content?.parts || [];
+      for (const part of parts) {
+        if (typeof part.text === 'string') candidateTexts.push(part.text);
+      }
+    }
+  }
+  if (candidateTexts.length) return candidateTexts.join('\n').trim();
+
   const chunks = [];
   const visit = (value) => {
     if (!value) return;
@@ -3720,76 +3733,128 @@ function cleanGeminiVideoSummary(text = '') {
   return cleaned;
 }
 
+async function callGeminiGenerateContentVideoUrl({ apiKey, model, videoUrl, prompt }) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { fileData: { fileUri: videoUrl, mimeType: 'video/mp4' } },
+            { text: prompt }
+          ]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.18,
+        maxOutputTokens: 4096
+      }
+    })
+  });
+
+  const rawText = await response.text();
+  let data = null;
+  try { data = rawText ? JSON.parse(rawText) : null; } catch { data = null; }
+
+  if (!response.ok) {
+    const message = data?.error?.message || rawText.slice(0, 500) || `Gemini generateContent failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return extractGeminiOutputText(data);
+}
+
+async function callGeminiInteractionsVideoUrl({ apiKey, model, videoUrl, prompt }) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/interactions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        { type: 'video', uri: videoUrl },
+        { type: 'text', text: prompt }
+      ]
+    })
+  });
+
+  const rawText = await response.text();
+  let data = null;
+  try { data = rawText ? JSON.parse(rawText) : null; } catch { data = null; }
+
+  if (!response.ok) {
+    const message = data?.error?.message || rawText.slice(0, 500) || `Gemini interactions failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return extractGeminiOutputText(data);
+}
+
 async function summarizeYoutubeDirectWithGemini(videoUrl, language = 'English', summaryType = 'brief') {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return { ok: false, errorMessage: 'GEMINI_API_KEY is missing in Render Environment.' };
   }
 
-  const model = process.env.GEMINI_VIDEO_MODEL || 'gemini-3.5-flash';
+  const generateContentModel = process.env.GEMINI_VIDEO_MODEL || 'gemini-2.5-flash';
+  const interactionsModel = process.env.GEMINI_INTERACTIONS_MODEL || 'gemini-3.5-flash';
   const targetLanguage = languageDisplayName(language);
   const isBullets = summaryType === 'bullets';
 
-  const prompt = `You are Brief Bot. Analyze this public YouTube video directly from its audio and visual content.
+  const prompt = `You are Brief Bot. Analyze this public YouTube video directly from its spoken audio and visual content.
 
 Output language: ${targetLanguage}
 Summary style: ${isBullets ? 'important bullet timeline' : 'detailed student-friendly timeline summary'}
 
 STRICT OUTPUT RULES:
-- Give the summary based on the actual spoken audio in the video.
+- Generate the summary from the actual audio speech in the video.
 - Include timestamps from beginning to end.
 - Use this exact format for every point: ⏱ MM:SS summary text
 - Keep timestamps in chronological order.
 - Cover the full video, not only the first half.
 - Do not say transcript unavailable.
-- Do not mention that you are Gemini.
-- Do not include headings unless needed.
+- Do not mention Gemini, AI Studio, API, or backend.
+- Do not include Markdown tables.
 ${isBullets ? '- Keep each timestamp point short and important.' : '- Each timestamp point should be useful and clear, 1 to 2 sentences when needed.'}
 
 Now generate the summary.`;
 
+  const errors = [];
+
   try {
-    console.log('[Gemini Video Summary] Starting direct YouTube URL analysis');
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/interactions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey
-      },
-      body: JSON.stringify({
-        model,
-        input: [
-          { type: 'video', uri: videoUrl },
-          { type: 'text', text: prompt }
-        ]
-      })
-    });
-
-    const rawText = await response.text();
-    let data = null;
-    try {
-      data = rawText ? JSON.parse(rawText) : null;
-    } catch {
-      data = null;
-    }
-
-    if (!response.ok) {
-      const message = data?.error?.message || rawText.slice(0, 500) || `Gemini video request failed with status ${response.status}`;
-      console.log('[Gemini Video Summary] failed:', message);
-      return { ok: false, errorMessage: `Gemini video summary failed: ${message}` };
-    }
-
-    const outputText = extractGeminiOutputText(data);
+    console.log('[Gemini Video Summary V4] Trying generateContent YouTube URL. Key loaded=YES, model=' + generateContentModel);
+    const outputText = await callGeminiGenerateContentVideoUrl({ apiKey, model: generateContentModel, videoUrl, prompt });
     const summary = cleanGeminiVideoSummary(outputText);
-    if (!summary || summary.length < 80) {
-      return { ok: false, errorMessage: 'Gemini did not return enough video summary content.' };
+    if (summary && summary.length >= 80) {
+      return { ok: true, summary, sourceType: 'gemini-youtube-video-generateContent' };
     }
-
-    return { ok: true, summary, sourceType: 'gemini-youtube-video' };
+    errors.push('generateContent returned too little text.');
   } catch (error) {
-    console.log('[Gemini Video Summary] exception:', error.message);
-    return { ok: false, errorMessage: `Gemini video summary failed: ${error.message}` };
+    console.log('[Gemini Video Summary V4] generateContent failed:', error.message);
+    errors.push(`generateContent: ${error.message}`);
   }
+
+  try {
+    console.log('[Gemini Video Summary V4] Trying interactions YouTube URL. model=' + interactionsModel);
+    const outputText = await callGeminiInteractionsVideoUrl({ apiKey, model: interactionsModel, videoUrl, prompt });
+    const summary = cleanGeminiVideoSummary(outputText);
+    if (summary && summary.length >= 80) {
+      return { ok: true, summary, sourceType: 'gemini-youtube-video-interactions' };
+    }
+    errors.push('interactions returned too little text.');
+  } catch (error) {
+    console.log('[Gemini Video Summary V4] interactions failed:', error.message);
+    errors.push(`interactions: ${error.message}`);
+  }
+
+  return {
+    ok: false,
+    errorMessage: `Gemini video summary failed. ${errors.join(' | ').slice(0, 900)}`
+  };
 }
 
 app.post('/api/analyze', async (req, res) => {
