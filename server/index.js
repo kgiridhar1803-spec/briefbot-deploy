@@ -469,7 +469,7 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'briefbot-summary-quality-safe-v2-2026-06-23',
+    version: 'briefbot-gemini-youtube-audio-summary-v3-2026-06-23',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
@@ -3663,6 +3663,135 @@ app.post('/api/check-video-support', async (req, res) => {
   }
 });
 
+function extractGeminiOutputText(data) {
+  if (!data) return '';
+  if (typeof data.output_text === 'string') return data.output_text;
+  if (typeof data.outputText === 'string') return data.outputText;
+  if (typeof data.text === 'string') return data.text;
+  if (typeof data.response?.text === 'string') return data.response.text;
+
+  const chunks = [];
+  const visit = (value) => {
+    if (!value) return;
+    if (typeof value === 'string') return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value === 'object') {
+      if (typeof value.text === 'string') chunks.push(value.text);
+      if (typeof value.output_text === 'string') chunks.push(value.output_text);
+      Object.keys(value).forEach((key) => {
+        if (!['text', 'output_text'].includes(key)) visit(value[key]);
+      });
+    }
+  };
+  visit(data);
+  return chunks.join('\n').trim();
+}
+
+function cleanGeminiVideoSummary(text = '') {
+  const cleaned = String(text || '')
+    .replace(/\[\[END_SUMMARY\]\]/g, '')
+    .replace(/^```(?:markdown|text)?/i, '')
+    .replace(/```$/g, '')
+    .trim();
+
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^here( is|'s)|^sure[,!]?/i.test(line));
+
+  const timestampLines = lines
+    .map((line) => line.replace(/^[-*•]\s*/, ''))
+    .filter((line) => /(?:⏱\s*)?\d{1,2}:\d{2}(?::\d{2})?/.test(line));
+
+  if (timestampLines.length >= 3) {
+    return timestampLines
+      .map((line) => {
+        const match = line.match(/(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—:]?\s*(.+)/);
+        if (!match) return line;
+        return `⏱ ${match[1]} ${stripBadLeadingTimestampAndNumbering(match[2])}`;
+      })
+      .join('\n\n');
+  }
+
+  return cleaned;
+}
+
+async function summarizeYoutubeDirectWithGemini(videoUrl, language = 'English', summaryType = 'brief') {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return { ok: false, errorMessage: 'GEMINI_API_KEY is missing in Render Environment.' };
+  }
+
+  const model = process.env.GEMINI_VIDEO_MODEL || 'gemini-3.5-flash';
+  const targetLanguage = languageDisplayName(language);
+  const isBullets = summaryType === 'bullets';
+
+  const prompt = `You are Brief Bot. Analyze this public YouTube video directly from its audio and visual content.
+
+Output language: ${targetLanguage}
+Summary style: ${isBullets ? 'important bullet timeline' : 'detailed student-friendly timeline summary'}
+
+STRICT OUTPUT RULES:
+- Give the summary based on the actual spoken audio in the video.
+- Include timestamps from beginning to end.
+- Use this exact format for every point: ⏱ MM:SS summary text
+- Keep timestamps in chronological order.
+- Cover the full video, not only the first half.
+- Do not say transcript unavailable.
+- Do not mention that you are Gemini.
+- Do not include headings unless needed.
+${isBullets ? '- Keep each timestamp point short and important.' : '- Each timestamp point should be useful and clear, 1 to 2 sentences when needed.'}
+
+Now generate the summary.`;
+
+  try {
+    console.log('[Gemini Video Summary] Starting direct YouTube URL analysis');
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/interactions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          { type: 'video', uri: videoUrl },
+          { type: 'text', text: prompt }
+        ]
+      })
+    });
+
+    const rawText = await response.text();
+    let data = null;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+    } catch {
+      data = null;
+    }
+
+    if (!response.ok) {
+      const message = data?.error?.message || rawText.slice(0, 500) || `Gemini video request failed with status ${response.status}`;
+      console.log('[Gemini Video Summary] failed:', message);
+      return { ok: false, errorMessage: `Gemini video summary failed: ${message}` };
+    }
+
+    const outputText = extractGeminiOutputText(data);
+    const summary = cleanGeminiVideoSummary(outputText);
+    if (!summary || summary.length < 80) {
+      return { ok: false, errorMessage: 'Gemini did not return enough video summary content.' };
+    }
+
+    return { ok: true, summary, sourceType: 'gemini-youtube-video' };
+  } catch (error) {
+    console.log('[Gemini Video Summary] exception:', error.message);
+    return { ok: false, errorMessage: `Gemini video summary failed: ${error.message}` };
+  }
+}
+
 app.post('/api/analyze', async (req, res) => {
   const { type, language, summaryType, userId } = req.body || {};
   const finalContent = getUrlFromRequest(req);
@@ -3689,8 +3818,28 @@ app.post('/api/analyze', async (req, res) => {
         }
 
         if (!transcript.ok) {
+          const geminiVideo = await summarizeYoutubeDirectWithGemini(finalContent, targetLanguage, summaryType);
+
+          if (geminiVideo.ok && geminiVideo.summary) {
+            let historyItem = null;
+            if (userId && geminiVideo.summary) {
+              try {
+                historyItem = await saveSummaryHistoryToFirebase({
+                  userId,
+                  url: finalContent,
+                  summary: geminiVideo.summary,
+                  language: targetLanguage,
+                  summaryType
+                });
+              } catch (historyError) {
+                console.error('[Gemini Analyze History Save Warning]', historyError.message);
+              }
+            }
+            return res.json({ data: geminiVideo.summary, historyItem, sourceType: geminiVideo.sourceType });
+          }
+
           return res.status(422).json({
-            error: transcript.errorMessage || '⚠️ This YouTube link is not accessible enough to process. It may be private, deleted, age-restricted, live-only, region-blocked, or captions are unavailable.'
+            error: geminiVideo.errorMessage || transcript.errorMessage || '⚠️ This YouTube link is not accessible enough to process. It may be private, deleted, age-restricted, live-only, region-blocked, or captions are unavailable.'
           });
         }
 
@@ -3763,7 +3912,18 @@ async function getVideoCompareSource(videoUrl, language = 'English') {
   let transcript = await getYouTubeContentWithFallback(videoId, language, cleanUrl);
 
   if (!transcript?.ok || !transcript?.text) {
-    throw new Error('One of the videos is private, deleted, age-restricted, live-only, region-blocked, or inaccessible.');
+    const geminiVideo = await summarizeYoutubeDirectWithGemini(cleanUrl, language, 'brief');
+    if (!geminiVideo.ok || !geminiVideo.summary) {
+      throw new Error(geminiVideo.errorMessage || 'One of the videos is private, deleted, age-restricted, live-only, region-blocked, or inaccessible.');
+    }
+    return {
+      url: cleanUrl,
+      videoId,
+      title: extractTitleFromSummary(geminiVideo.summary),
+      summary: String(geminiVideo.summary || '').slice(0, 4500),
+      transcriptPreview: String(geminiVideo.summary || '').slice(0, 3000),
+      durationRange: { start: '0:00', end: 'Gemini video analysis' }
+    };
   }
 
   const summary = await summarizeWithTimestamps(transcript.text, language, 'brief');
