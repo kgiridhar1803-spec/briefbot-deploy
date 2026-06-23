@@ -136,6 +136,24 @@ function safeHistoryItem(doc) {
   };
 }
 
+
+function safePptItem(doc) {
+  const data = doc?.data ? doc.data() : (doc || {});
+  return {
+    id: doc?.id || data.id || `ppt-${Date.now()}`,
+    userId: data.userId || '',
+    title: data.title || 'Brief Bot PPT',
+    subtitle: data.subtitle || '',
+    actionType: data.actionType || 'generated',
+    slideCount: Number(data.slideCount || 0),
+    template: data.template || 'floral',
+    fileName: data.fileName || '',
+    savedAt: data.savedAt || data.createdAt || null,
+    createdAt: data.createdAt || null,
+    updatedAt: data.updatedAt || null
+  };
+}
+
 async function saveSummaryHistoryToFirebase({ userId, url, summary, language, summaryType, title, description }) {
   const cleanUserId = String(userId || '').trim();
   const cleanUrl = String(url || '').trim();
@@ -371,8 +389,8 @@ function getModelList() {
 const MIN_TRANSCRIPT_WORDS = 60;
 const MAX_TRANSCRIPT_CHARS = 30000;
 const SUMMARY_INPUT_CHARS = 7000; // Safe input budget for Cerebras summary calls
-const TIMELINE_SAMPLE_CHARS = 9500; // More transcript coverage for richer brief paragraphs
-const SUMMARY_MAX_TOKENS = 2600;
+const TIMELINE_SAMPLE_CHARS = 14000; // Stronger full-video transcript coverage
+const SUMMARY_MAX_TOKENS = 3200;
 const CHAT_MAX_TOKENS = 250;
 const QUESTION_MAX_TOKENS = 350;
 const ANSWER_MAX_TOKENS = 300;
@@ -451,7 +469,7 @@ async function saveAssessmentHistory(userId, record) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: 'brief-bot-admin-dashboard-users-only-2026-06-01-v9',
+    version: 'briefbot-summary-quality-safe-v2-2026-06-23',
     provider: 'Cerebras',
     keyLoaded: process.env.CEREBRAS_API_KEY ? 'YES' : 'NO',
     assessmentKeyLoaded: process.env.CEREBRAS_ASSESSMENT_API_KEY ? 'YES' : 'NO - fallback to main key',
@@ -930,6 +948,17 @@ async function getYouTubeContentWithFallback(videoId, selectedLanguage, original
     return { ...transcript, sourceType: 'captions', fallbackUsed: false };
   }
 
+  if (process.env.ALLOW_METADATA_FALLBACK !== 'true') {
+    return {
+      ...(transcript || {}),
+      ok: false,
+      text: transcript?.text || '',
+      sourceType: 'captions-unavailable',
+      fallbackUsed: false,
+      errorMessage: 'This video has no accessible captions/transcript on the deployed server. Please try another video with captions or auto-captions.'
+    };
+  }
+
   const metadata = await fetchYouTubeMetadataFallback(videoId, originalUrl);
   const fallbackText = buildFallbackTranscriptFromMetadata(metadata, videoId);
   const fallbackWords = countWords(fallbackText);
@@ -1157,21 +1186,19 @@ function compactTranscriptLine(line, maxTextChars) {
 function getTimelinePointCount(durationSeconds, lineCount, summaryType = 'brief') {
   if (lineCount <= 4) return lineCount;
 
-  // Bullets mode = only important points, so keep fewer/high-value points.
   if (summaryType === 'bullets') {
-    if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(5, lineCount);
-    if (durationSeconds <= 12 * 60) return Math.min(7, lineCount);
-    if (durationSeconds <= 25 * 60) return Math.min(9, lineCount);
-    if (durationSeconds <= 45 * 60) return Math.min(10, lineCount);
-    return Math.min(11, lineCount);
+    if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(6, lineCount);
+    if (durationSeconds <= 12 * 60) return Math.min(9, lineCount);
+    if (durationSeconds <= 25 * 60) return Math.min(12, lineCount);
+    if (durationSeconds <= 45 * 60) return Math.min(14, lineCount);
+    return Math.min(16, lineCount);
   }
 
-  // Brief mode = main summary, so give more complete coverage from start to end.
-  if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(7, lineCount);
-  if (durationSeconds <= 12 * 60) return Math.min(10, lineCount);
-  if (durationSeconds <= 25 * 60) return Math.min(13, lineCount);
-  if (durationSeconds <= 45 * 60) return Math.min(15, lineCount);
-  return Math.min(16, lineCount);
+  if (!durationSeconds || durationSeconds <= 5 * 60) return Math.min(9, lineCount);
+  if (durationSeconds <= 12 * 60) return Math.min(14, lineCount);
+  if (durationSeconds <= 25 * 60) return Math.min(18, lineCount);
+  if (durationSeconds <= 45 * 60) return Math.min(22, lineCount);
+  return Math.min(24, lineCount);
 }
 
 function sampleTranscriptForFullCoverage(transcript, durationSeconds, summaryType = 'brief') {
@@ -1226,6 +1253,95 @@ function getTranscriptTimeRange(transcript) {
 
 function hasEndSummaryMarker(text) {
   return String(text || '').includes('[[END_SUMMARY]]');
+}
+
+function extractSelectedTimelinePoints(selectedTranscript) {
+  const lines = String(selectedTranscript || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const points = [];
+  const seenSeconds = new Set();
+
+  for (const line of lines) {
+    const match = line.match(/^Point\s+\d+:\s*(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/i);
+    if (!match) continue;
+
+    const seconds = timestampToSeconds(match[1]);
+    if (seenSeconds.has(seconds)) continue;
+    seenSeconds.add(seconds);
+
+    points.push({ timestamp: match[1], seconds, text: cleanText(match[2]) });
+  }
+
+  return points.sort((a, b) => a.seconds - b.seconds);
+}
+
+function stripBadLeadingTimestampAndNumbering(line) {
+  return String(line || '')
+    .replace(/^\s*(?:[-*•]\s*)?\d+[.)]\s*/g, '')
+    .replace(/^\s*(?:⏱\s*)?\d{1,2}[.:]\d{1,2}(?:(?:[.:])\d{1,2})?\s*/g, '')
+    .replace(/^\s*(?:⏱\s*)?\d{1,2}:\d{2}(?::\d{2})?\s*/g, '')
+    .replace(/^\s*ID\s*\d+\s*[:.)-]\s*/i, '')
+    .replace(/^\s*[-–—:]+\s*/g, '')
+    .trim();
+}
+
+function extractStrictSummaryTimestamps(summaryText) {
+  const matches = [...String(summaryText || '').matchAll(/(?:^|\n)\s*(?:[-*]\s*)?(?:⏱\s*)?(\d{1,2}:\d{2}(?::\d{2})?)\b/g)];
+  return matches.map((match) => ({ timestamp: match[1], seconds: timestampToSeconds(match[1]) }));
+}
+
+function validateSummaryTimelineCoverage(summaryText, durationSeconds = 0) {
+  const points = extractStrictSummaryTimestamps(summaryText);
+  if (points.length < 3) return { ok: false, reason: 'Too few valid timestamped points.' };
+
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index].seconds < points[index - 1].seconds) {
+      return { ok: false, reason: 'Timestamps are not in chronological order.' };
+    }
+  }
+
+  if (durationSeconds >= 6 * 60) {
+    const lastSecond = points[points.length - 1].seconds;
+    const requiredCoverage = Math.max(60, Math.floor(durationSeconds * 0.72));
+    if (lastSecond < requiredCoverage) {
+      return { ok: false, reason: `Summary stopped too early at ${secondsToTimestamp(lastSecond)}.` };
+    }
+  }
+
+  return { ok: true, reason: 'Timeline coverage is valid.' };
+}
+
+function parseAiIdSummaries(aiText) {
+  const idSummaryMap = new Map();
+  String(aiText || '')
+    .replace(/\[\[END_SUMMARY\]\]/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      const match = line.match(/^ID\s*(\d+)\s*[:.)-]\s*(.+)$/i);
+      if (!match) return;
+      const id = Number(match[1]);
+      const cleaned = stripBadLeadingTimestampAndNumbering(match[2]);
+      if (id && cleaned.length > 10) idSummaryMap.set(id, cleaned);
+    });
+  return idSummaryMap;
+}
+
+function createDeterministicFullCoverageSummary(selectedTranscript, summaryType = 'brief') {
+  const points = extractSelectedTimelinePoints(selectedTranscript);
+  if (!points.length) return '⏱ 0:00 Summary could not be generated because no valid transcript timestamps were found.';
+
+  if (summaryType === 'bullets') {
+    return points.map((point) => `⏱ ${point.timestamp} ${clipTranscriptToCompleteSentence(point.text, 170)}`).join('\n');
+  }
+
+  return points
+    .map((point) => `⏱ ${point.timestamp} ${clipTranscriptToCompleteSentence(point.text, 260)} This point is included in the correct video order for full coverage.`)
+    .join('\n\n');
 }
 
 async function generateCompleteSummaryWithRetry(basePrompt, targetLanguage, isBullets, pointCount) {
@@ -1284,64 +1400,66 @@ async function summarizeWithTimestamps(transcript, language, summaryType) {
   const durationSeconds = estimateVideoDurationFromTranscript(transcript);
   const timeRange = getTranscriptTimeRange(transcript);
   const selectedTranscript = sampleTranscriptForFullCoverage(transcript, durationSeconds, summaryType);
-  const pointCount = (selectedTranscript.match(/^Point\s+\d+:/gm) || []).length || 5;
+  const timelinePoints = extractSelectedTimelinePoints(selectedTranscript);
   const isBullets = summaryType === 'bullets';
 
-  console.log(`[Summary] duration=${durationSeconds}s, range=${timeRange.start}-${timeRange.end}, points=${pointCount}, inputChars=${selectedTranscript.length}`);
-  console.log('[Summary] selected first:', selectedTranscript.split('\n').slice(0, 2).join(' | '));
-  console.log('[Summary] selected last:', selectedTranscript.split('\n').slice(-2).join(' | '));
+  console.log(`[Summary Quality Safe V2] duration=${durationSeconds}s, range=${timeRange.start}-${timeRange.end}, points=${timelinePoints.length}`);
 
-  const prompt = isBullets
-    ? `Output language: ${targetLanguage}
-
-Create an IMPORTANT POINTS summary for the WHOLE video.
-
-BULLETS MODE RULES:
-- Use the selected timeline points below from beginning, middle, and end.
-- Produce exactly ${pointCount} important timestamped bullets, one for each Point.
-- Every bullet must start with the timestamp from that Point.
-- Mention only useful/high-value information. Remove filler, greetings, repeated statements, and unimportant examples.
-- Do NOT copy transcript lines directly; rewrite in clean student-friendly meaning.
-- Keep every bullet short, complete, and easy to revise.
-- Every bullet must end as a complete sentence. Never end with and, for, where, with, to, of, because, including, or like.
-- Include the final/end timestamp near ${timeRange.end}.
-- Do not add headings.
-- End with [[END_SUMMARY]].
-
-Selected timeline points:
-${selectedTranscript}`
-    : `Output language: ${targetLanguage}
-
-Create a COMPLETE timestamped BRIEF SUMMARY using PARAGRAPH-STYLE POINTS ONLY for the WHOLE video.
-
-BRIEF MODE RULES:
-- Use the selected timeline points below from beginning, middle, and end.
-- Produce exactly ${Math.max(pointCount, 8)} timestamped paragraph-style summary points.
-- Every point must start with a timestamp from the selected timeline points.
-- Do NOT use bullet symbols, headings, numbering, tables, or labels like "Point 1".
-- Each timestamped point must be a small paragraph of 2 complete sentences.
-- Give MORE INFORMATION from the video: include important facts, names, examples, numbers, comparisons, causes, effects, steps, results, and conclusions when present.
-- Keep the language neat, simple, and student-friendly.
-- Do NOT copy transcript lines directly; rewrite the meaning clearly.
-- Remove filler, greetings, repeated lines, sponsor talk, and unnecessary conversation.
-- Use **bold** only for very important keywords.
-- Cover the complete video from ${timeRange.start} to ${timeRange.end}, including the final/end timestamp near ${timeRange.end}.
-- Every sentence must be complete. Do not stop in the middle.
-- Never end a point with and, for, where, with, to, of, because, including, or like.
-- End with [[END_SUMMARY]].
-
-Selected timeline points:
-${selectedTranscript}`;
-
-  const cleaned = await generateCompleteSummaryWithRetry(prompt, targetLanguage, isBullets, pointCount);
-
-  if (!cleaned || cleaned.length < 40) {
-    throw new Error('Summary generation returned empty output. Please try again.');
+  if (!timelinePoints.length) {
+    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
   }
 
-  const finalSummary = finalizeSummarySentences(cleaned);
-  if (!finalSummary || hasBrokenSummarySentences(finalSummary)) {
-    throw new Error('Summary validation failed because incomplete sentences were detected. Please try again.');
+  const pointInput = timelinePoints
+    .map((point, index) => `ID ${index + 1}: ${clipTranscriptToCompleteSentence(point.text, isBullets ? 260 : 380)}`)
+    .join('\n');
+
+  const prompt = `Output language: ${targetLanguage}
+
+Create summary text for each transcript timeline point below.
+The backend will add exact timestamps, so you must not write timestamps.
+
+STRICT RULES:
+- Return exactly ${timelinePoints.length} lines.
+- Use only this format: ID 1: summary text
+- Keep ID order from 1 to ${timelinePoints.length}.
+- Do NOT write timestamps.
+- Do NOT write headings, tables, bullets, or numbering except the ID label.
+- Do NOT copy the transcript directly. Explain the meaning clearly.
+- Every line must be a complete sentence.
+${isBullets ? '- Each line should be one short important point.' : '- Each line should be 1 to 2 useful student-friendly sentences with enough detail.'}
+
+Transcript timeline points:
+${pointInput}`;
+
+  let aiText = '';
+  try {
+    aiText = await generateText({
+      messages: [
+        { role: 'system', content: 'You summarize transcript points. Never create timestamps. Return exact ID lines only.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.04,
+      maxTokens: isBullets ? 1200 : 2400
+    });
+  } catch (error) {
+    console.warn('[Summary Quality Safe V2] AI failed, using safe timeline fallback:', error.message);
+    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
+  }
+
+  const idSummaryMap = parseAiIdSummaries(aiText);
+  const finalLines = timelinePoints.map((point, index) => {
+    const id = index + 1;
+    const aiSummary = idSummaryMap.get(id);
+    const fallbackSummary = clipTranscriptToCompleteSentence(point.text, isBullets ? 170 : 260);
+    const cleanSummary = clipTranscriptToCompleteSentence(stripBadLeadingTimestampAndNumbering(aiSummary || fallbackSummary), isBullets ? 220 : 380);
+    return `⏱ ${point.timestamp} ${cleanSummary}`;
+  });
+
+  const finalSummary = finalLines.join(isBullets ? '\n' : '\n\n');
+  const timelineCheck = validateSummaryTimelineCoverage(finalSummary, durationSeconds);
+  if (!timelineCheck.ok) {
+    console.warn('[Summary Quality Safe V2] validation failed:', timelineCheck.reason);
+    return createDeterministicFullCoverageSummary(selectedTranscript, summaryType);
   }
 
   return finalSummary;
@@ -3328,7 +3446,35 @@ app.get('/api/admin/users/:userId/progress', async (req, res) => {
     return res.json({ ok: true, ...progress });
   } catch (error) {
     console.error('[Admin User Progress Error]', error);
-    return res.status(500).json({ error: error.message });
+    const userId = String(req.params.userId || '').trim();
+    let fallbackUser = null;
+    try {
+      fallbackUser = await getUserProfile(userId);
+    } catch {}
+
+    return res.json({
+      ok: true,
+      warning: error.message,
+      user: fallbackUser || { id: userId, name: 'User', email: '' },
+      summaries: [],
+      ppts: [],
+      attempts: [],
+      battleRooms: [],
+      smartCompares: [],
+      stats: {
+        summaryCount: Number(fallbackUser?.summariesGenerated || 0),
+        pptCount: Number(fallbackUser?.pptsGenerated || 0),
+        assessmentCount: 0,
+        assessmentsCreated: 0,
+        battleRoomCount: 0,
+        smartCompareCount: 0,
+        attemptCount: 0,
+        averageScore: 0,
+        highestScore: 0,
+        lowestScore: 0,
+        lastScore: 0
+      }
+    });
   }
 });
 
@@ -3544,7 +3690,7 @@ app.post('/api/analyze', async (req, res) => {
 
         if (!transcript.ok) {
           return res.status(422).json({
-            error: '⚠️ This YouTube link is not accessible enough to process. It may be private, deleted, age-restricted, live-only, or region-blocked.'
+            error: transcript.errorMessage || '⚠️ This YouTube link is not accessible enough to process. It may be private, deleted, age-restricted, live-only, region-blocked, or captions are unavailable.'
           });
         }
 
@@ -4954,6 +5100,8 @@ function getPptTemplateStyle(template = 'floral') {
     }
   };
 
+  if (template === 'chalkboard') return styles.academic || styles.floral;
+  if (template === 'futuristic') return styles.modern || styles.floral;
   return styles[template] || styles.floral;
 }
 
@@ -4971,12 +5119,10 @@ function getPptFontStyleMetaBackend(style = 'modern') {
   return map[style] || map.modern;
 }
 
-async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Presentation', actionType = 'exported', slideCount = 0, template = 'floral' } = {}) {
+async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Presentation', actionType = 'exported', slideCount = 0, template = 'floral', fileName = '' } = {}) {
   try {
     const cleanUserId = String(userId || '').trim();
-    if (!cleanUserId || !db) {
-      return null;
-    }
+    if (!cleanUserId) return null;
 
     const record = {
       userId: cleanUserId,
@@ -4984,16 +5130,18 @@ async function savePptRecordToFirebase({ userId = '', title = 'Brief Bot Present
       actionType: String(actionType || 'exported').slice(0, 40),
       slideCount: Number(slideCount || 0),
       template: String(template || 'floral').slice(0, 40),
-      createdAt: new Date().toISOString()
+      fileName: String(fileName || '').slice(0, 160),
+      savedAt: nowISO(),
+      createdAt: nowISO(),
+      updatedAt: nowISO()
     };
 
-    const collectionRef = db.collection('pptHistory');
-    const docRef = await collectionRef.add(record);
+    const docRef = usersCollection.doc(cleanUserId).collection('savedPpts').doc();
+    await docRef.set(record);
+    await usersCollection.doc(cleanUserId).set({ pptsGenerated: admin.firestore.FieldValue.increment(1), updatedAt: nowISO() }, { merge: true });
+    await addActivity({ userId: cleanUserId, type: 'ppt_record_saved', meta: { title: record.title, actionType: record.actionType, slideCount: record.slideCount } });
 
-    return {
-      id: docRef.id,
-      ...record
-    };
+    return { id: docRef.id, ...record };
   } catch (error) {
     console.error('[PPT Firebase Save Skipped]', error.message);
     return null;
@@ -5217,7 +5365,8 @@ app.post('/api/ppt/export', async (req, res) => {
     if (userId && saveRecord) {
       await savePptRecordToFirebase({
         userId,
-        pptPlan: plan,
+        title: plan.title,
+        slideCount: plan.slides.length,
         template,
         fileName: `${safeFileName}.pptx`,
         actionType
